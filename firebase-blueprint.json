@@ -12,6 +12,8 @@
         "isPlus": { "type": "boolean" },
         "preferences": { "type": "object" },
         "notifications": { "type": "object" },
+        "keywords": { "type": "array" },
+        "reminders": { "type": "array" },
         "quotaResetAt": { "type": "number", "description": "Timestamp when the message quota resets." }
       }
     },

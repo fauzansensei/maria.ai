@@ -126,6 +126,7 @@ function MainApp() {
   const [searchQuery, setSearchQuery] = useState('');
   const [chatSessions, setChatSessions] = useState<ChatSession[]>([]);
   const [activeChatId, setActiveChatId] = useState<string>('');
+  const [isMigrationFinished, setIsMigrationFinished] = useState(false);
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renamingTitle, setRenamingTitle] = useState('');
@@ -503,60 +504,144 @@ function MainApp() {
           // Cleanup previous snapshots
           unsubscribeUser();
           unsubscribeChats();
+          setIsMigrationFinished(false);
 
           if (!currentUser) {
             setUser(null);
             setUserName('Pengguna');
             setUserAvatar(null);
+            setIsPlus(false);
+            setIsMigrationFinished(true);
+            localStorage.removeItem('maria_profile');
+            localStorage.removeItem('maria_quota_limit');
             return;
           }
           
-          setUser(currentUser);
-          
-          // 1. Sync Anonymous Local Chats to User UID
+          // 1. Synchronous Migration (Legacy -> V2)
+          const legacyHistory = localStorage.getItem('maria_chat_history');
+          if (legacyHistory && legacyHistory !== 'null') {
+            try {
+              const messages = JSON.parse(legacyHistory);
+              if (Array.isArray(messages) && messages.length > 0) {
+                const firstUserMsg = messages.find((m: any) => m.role === 'user');
+                const title = firstUserMsg ? (firstUserMsg.content.substring(0, 35) + (firstUserMsg.content.length > 35 ? '...' : '')) : 'Migration Chat';
+                const newId = generateId('legacy');
+                const chatsStr = localStorage.getItem('maria_chats');
+                const chatsObj = (chatsStr && chatsStr !== 'null') ? JSON.parse(chatsStr) : {};
+                chatsObj[newId] = { id: newId, title, updatedAt: Date.now(), userId: 'anonymous' };
+                localStorage.setItem(`maria_history_${newId}`, JSON.stringify(messages));
+                localStorage.setItem('maria_chats', JSON.stringify(chatsObj));
+                localStorage.removeItem('maria_chat_history');
+              }
+            } catch (e) {}
+          }
+
+          // 2. Auth Migration
+          // CRITICAL: Perform migration BEFORE setting user state to avoid MariaAgent race condition
           const chatsStr = localStorage.getItem('maria_chats');
           if (chatsStr) {
             try {
               const chatsObj = JSON.parse(chatsStr);
-              let changed = false;
+              const toMigrateMetadata: string[] = [];
               Object.keys(chatsObj).forEach(id => {
                 if (!chatsObj[id].userId || chatsObj[id].userId === 'anonymous') {
                   chatsObj[id].userId = currentUser.uid;
-                  changed = true;
+                  toMigrateMetadata.push(id);
                 }
               });
-              if (changed) {
-                localStorage.setItem('maria_chats', JSON.stringify(chatsObj));
-                // Sync to Firebase (metadata)
+
+              if (toMigrateMetadata.length > 0) {
                 const { doc, writeBatch } = await import('firebase/firestore');
-                const { db } = await import('./lib/firebase');
+                const { db, sanitizeForFirestore } = await import('./lib/firebase');
                 if (db) {
-                   const batch = writeBatch(db);
-                   Object.keys(chatsObj).forEach(id => {
+                   // Important: Update local state IMMEDIATELY to avoid flicker
+                   localStorage.setItem('maria_chats', JSON.stringify(chatsObj));
+                   const sessions = Object.values(chatsObj) as ChatSession[];
+                   setChatSessions(sessions.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)));
+
+                   // Split into multiple batches if needed (Firestore limit is 500 ops)
+                   const totalOps = toMigrateMetadata.reduce((acc, id) => {
+                      const hist = localStorage.getItem(`maria_history_${id}`);
+                      try {
+                        const msgs = JSON.parse(hist || '[]');
+                        return acc + 1 + (Array.isArray(msgs) ? msgs.length : 0);
+                      } catch(e) { return acc + 1; }
+                   }, 0);
+
+                   // For simplicity, we create one batch for metadata and then individual batches for messages 
+                   // if they are large, but for now we just try to be more robust.
+                   const masterBatch = writeBatch(db);
+                   
+                   for (const id of toMigrateMetadata) {
                       const chatRef = doc(db, 'chats', id);
-                      batch.set(chatRef, {
+                      masterBatch.set(chatRef, {
                         userId: currentUser.uid,
                         title: chatsObj[id].title,
                         updatedAt: chatsObj[id].updatedAt,
                         isPinned: chatsObj[id].isPinned || false,
                         isFavorite: chatsObj[id].isFavorite || false
                       }, { merge: true });
-                   });
-                   await batch.commit().catch(console.error);
-                }
+
+                      const historyStr = localStorage.getItem(`maria_history_${id}`);
+                      if (historyStr) {
+                        try {
+                          const msgs = JSON.parse(historyStr);
+                          if (Array.isArray(msgs)) {
+                             let msgBatch = writeBatch(db);
+                             let msgCount = 0;
+                             for (const m of msgs) {
+                               const msgRef = doc(db, 'chats', id, 'messages', m.id || generateId('msg'));
+                               msgBatch.set(msgRef, sanitizeForFirestore(m));
+                               msgCount++;
+                               if (msgCount >= 450) {
+                                  await msgBatch.commit().catch(console.error);
+                                  msgBatch = writeBatch(db);
+                                  msgCount = 0;
+                               }
+                             }
+                             if (msgCount > 0) await msgBatch.commit().catch(console.error);
+                          }
+                        } catch(e) {}
+                      }
+                   }
+
+                   // 2. Migrate Extras (Keywords & Reminders)
+                   const localKeywords = localStorage.getItem('maria_keywords');
+                   const localReminders = localStorage.getItem('maria_reminders');
+                   const extras: any = {};
+                   if (localKeywords) try { extras.keywords = JSON.parse(localKeywords); } catch(e) {}
+                   if (localReminders) try { extras.reminders = JSON.parse(localReminders); } catch(e) {}
+                   if (Object.keys(extras).length > 0) {
+                      masterBatch.set(doc(db, 'users', currentUser.uid), extras, { merge: true });
+                   }
+
+                    await masterBatch.commit().catch(console.error);
+                    setIsMigrationFinished(true);
+                 } else {
+                    setIsMigrationFinished(true); // No DB but migration logic ran
+                 }
+              } else {
+                setIsMigrationFinished(true); // Nothing to migrate
               }
             } catch (e) {
-              console.error("Maria: Failed to migrate anonymous chats", e);
+              console.error("Maria: Migration failed", e);
+              setIsMigrationFinished(true); // Continue even if failed to show what we have
             }
+          } else {
+            setIsMigrationFinished(true);
           }
+          
+          // Now it's safe to set user and trigger dependent components
+          setUser(currentUser);
 
-          // 2. Real-time Profile Listener
+          // 3. Real-time Profile Listener
           try {
             const { doc, onSnapshot, setDoc } = await import('firebase/firestore');
             const { db } = await import('./lib/firebase');
             if (db) {
               const userRef = doc(db, 'users', currentUser.uid);
               unsubscribeUser = onSnapshot(userRef, async (snap) => {
+
                 if (snap.exists()) {
                   const profile = snap.data();
                   setUserName(profile.name || currentUser.displayName || 'Pengguna');
@@ -570,6 +655,13 @@ function MainApp() {
                     localStorage.setItem('maria_quota_limit', profile.quotaResetAt.toString());
                   } else {
                     localStorage.removeItem('maria_quota_limit');
+                  }
+
+                  if (profile.keywords) {
+                    localStorage.setItem('maria_keywords', JSON.stringify(profile.keywords));
+                  }
+                  if (profile.reminders) {
+                    localStorage.setItem('maria_reminders', JSON.stringify(profile.reminders));
                   }
 
                   localStorage.setItem('maria_profile', JSON.stringify(profile));
@@ -610,45 +702,70 @@ function MainApp() {
               // 3. Real-time Chats Metadata Listener
               const { collection, query, where } = await import('firebase/firestore');
               const q = query(collection(db, 'chats'), where('userId', '==', currentUser.uid));
+              
+              let isFirstSnapshot = true;
+
               unsubscribeChats = onSnapshot(q, (snap) => {
                 const firebaseSessions: Record<string, any> = {};
                 snap.forEach(doc => {
                   firebaseSessions[doc.id] = { id: doc.id, ...doc.data() };
                 });
 
-                const currentLocal = JSON.parse(localStorage.getItem('maria_chats') || '{}');
+                const chatsStr = localStorage.getItem('maria_chats');
+                const currentLocal = JSON.parse(chatsStr || '{}');
                 const deletedIds = JSON.parse(localStorage.getItem('maria_deleted_chats') || '[]');
                 
                 const merged: Record<string, any> = {};
+                
                 // Add from Firebase (respect deletions)
                 Object.keys(firebaseSessions).forEach(id => {
                   if (!deletedIds.includes(id)) {
                     merged[id] = firebaseSessions[id];
                   }
                 });
+
                 // Merge with Local (local updates might be fresher before sync)
                 Object.keys(currentLocal).forEach(id => {
                   if (deletedIds.includes(id)) return;
+                  
+                  const localChat = currentLocal[id];
+                  const isRelevant = !localChat.userId || 
+                                   localChat.userId === 'anonymous' || 
+                                   localChat.userId === currentUser.uid;
+
                   if (merged[id]) {
                     merged[id] = {
                       ...merged[id],
-                      ...currentLocal[id],
-                      updatedAt: Math.max(merged[id].updatedAt || 0, currentLocal[id].updatedAt || 0)
+                      ...localChat,
+                      updatedAt: Math.max(merged[id].updatedAt || 0, localChat.updatedAt || 0)
                     };
-                  } else if (currentLocal[id].userId === currentUser.uid) {
-                    merged[id] = currentLocal[id];
+                  } else if (isRelevant) {
+                    // Keep local chats if they likely belong to this user or are pending migration
+                    merged[id] = localChat;
                   }
                 });
 
-                localStorage.setItem('maria_chats', JSON.stringify(merged));
+                const isWipeout = Object.keys(firebaseSessions).length === 0 && Object.keys(currentLocal).length > 0;
                 
-                // Update state
-                const sessions = Object.values(merged) as ChatSession[];
-                const sorted = sessions.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
-                setChatSessions(sorted);
+                if (isMigrationFinished || !isWipeout) {
+                   localStorage.setItem('maria_chats', JSON.stringify(merged));
+                   const sessions = Object.values(merged) as ChatSession[];
+                   const sorted = sessions.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+                   setChatSessions(sorted);
+                } else if (isFirstSnapshot) {
+                   // Still migrating or Firebase didn't return any docs for this user yet
+                   const sessions = Object.values(currentLocal).sort((a: any, b: any) => (b.updatedAt || 0) - (a.updatedAt || 0)) as ChatSession[];
+                   setChatSessions(sessions);
+                }
                 
-                if (!activeChatIdRef.current && sorted.length > 0) {
-                  setActiveChatId(sorted[0].id);
+                isFirstSnapshot = false;
+                
+                if (!activeChatIdRef.current) {
+                  const sessions = Object.values(merged) as ChatSession[];
+                  const sorted = sessions.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+                  if (sorted.length > 0) {
+                    setActiveChatId(sorted[0].id);
+                  }
                 }
               }, (err) => console.error("Chats snapshot error:", err));
             }

@@ -14,6 +14,9 @@ interface UserProfileData {
   avatar?: string;
   joinedDate: string;
   isPlus: boolean;
+  keywords?: KeywordSetting[];
+  reminders?: ReminderSetting[];
+  quotaResetAt?: number;
   preferences: {
     theme: 'dark' | 'light' | 'system';
     language: string;
@@ -129,37 +132,96 @@ export default function UserProfile({ isOpen, onClose, onLanguageChange, isLiteM
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    try {
-      const savedProfile = localStorage.getItem('maria_profile');
-      const savedKeywords = localStorage.getItem('maria_keywords');
-      const savedReminders = localStorage.getItem('maria_reminders');
+    const loadSettings = () => {
+      try {
+        const savedProfile = localStorage.getItem('maria_profile');
+        const savedKeywords = localStorage.getItem('maria_keywords');
+        const savedReminders = localStorage.getItem('maria_reminders');
 
-      if (savedKeywords && savedKeywords !== 'null' && savedKeywords !== 'undefined') {
-        const kws = JSON.parse(savedKeywords);
-        if (Array.isArray(kws)) setKeywords(kws);
-      }
-      
-      if (savedReminders && savedReminders !== 'null' && savedReminders !== 'undefined') {
-        const rems = JSON.parse(savedReminders);
-        if (Array.isArray(rems)) setReminders(rems);
-      }
-      
-      if (savedProfile && savedProfile !== 'null' && savedProfile !== 'undefined') {
-        const parsed = JSON.parse(savedProfile);
-        if (parsed && typeof parsed === 'object') {
-          setProfile(prev => ({
-            ...prev,
-            ...parsed,
-            preferences: {
-              ...prev.preferences,
-              ...(parsed.preferences || {})
-            }
-          }));
+        if (savedKeywords && savedKeywords !== 'null' && savedKeywords !== 'undefined') {
+          const kws = JSON.parse(savedKeywords);
+          if (Array.isArray(kws)) setKeywords(kws);
         }
+        
+        if (savedReminders && savedReminders !== 'null' && savedReminders !== 'undefined') {
+          const rems = JSON.parse(savedReminders);
+          if (Array.isArray(rems)) setReminders(rems);
+        }
+        
+        if (savedProfile && savedProfile !== 'null' && savedProfile !== 'undefined') {
+          const parsed = JSON.parse(savedProfile);
+          if (parsed && typeof parsed === 'object') {
+            setProfile(prev => ({
+              ...prev,
+              ...parsed,
+              preferences: {
+                ...prev.preferences,
+                ...(parsed.preferences || {})
+              }
+            }));
+          }
+        } else {
+          // Reset to default if no profile (logout)
+          setProfile({
+            name: 'Maria User',
+            email: 'premium@maria.ai',
+            joinedDate: new Date().toLocaleDateString('id-ID'),
+            isPlus: false,
+            preferences: {
+              theme: 'light',
+              language: 'id',
+              personality: 'ramah',
+              accentColor: 'blue',
+              safeMode: true,
+              autoSave: true,
+              useMemory: true,
+              performanceMode: false,
+              guardrailsEnabled: true,
+              style_tone: 'default',
+              warmth: 'default',
+              enthusiasm: 'default',
+              titles_lists: 'default',
+              emoji: 'default',
+              quick_answer: true,
+              nickname: '',
+              job: '',
+              bio: '',
+              use_history: true,
+              web_search: true,
+              canvas: true,
+              voice: true,
+              advanced_voice: true,
+              connector_search: true,
+              workStartTime: '08:00',
+              workEndTime: '17:00',
+              homeStartTime: '18:00',
+              autoNotify: true,
+              customInstructions: '',
+              paidApiKey: ''
+            },
+            notifications: {
+              codex: 'push',
+              group_chat: 'push',
+              usage: 'both',
+              project: 'email',
+              recommendation: 'push',
+              response: 'push',
+              tasks: 'both'
+            }
+          });
+        }
+      } catch (e) {
+        console.error("Maria: Failed to load settings", e);
       }
-    } catch (e) {
-      console.error("Maria: Failed to load settings", e);
-    }
+    };
+
+    loadSettings();
+    window.addEventListener('maria_refresh_system', loadSettings);
+    window.addEventListener('storage', loadSettings);
+    return () => {
+      window.removeEventListener('maria_refresh_system', loadSettings);
+      window.removeEventListener('storage', loadSettings);
+    };
   }, []);
 
   const saveProfile = async (nextProfile: UserProfileData) => {
@@ -177,7 +239,9 @@ export default function UserProfile({ isOpen, onClose, onLanguageChange, isLiteM
             name: nextProfile.name,
             avatar: nextProfile.avatar || null,
             preferences: nextProfile.preferences,
-            notifications: nextProfile.notifications
+            notifications: nextProfile.notifications,
+            keywords: keywords,
+            reminders: reminders
           } as any).catch(e => handleFirestoreError(e, OperationType.UPDATE, `users/${user.uid}`));
         }
       } catch (e) {
@@ -919,8 +983,105 @@ export default function UserProfile({ isOpen, onClose, onLanguageChange, isLiteM
                             </div>
                           </div>
 
-                          <div className="pt-4">
+                          <div className="pt-4 space-y-6">
+                            <div className="flex items-center gap-3 border-b border-slate-200/5 pb-2">
+                               <Zap size={14} className="text-brand-blue" />
+                               <span className={`text-[10px] font-black uppercase tracking-widest ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>Kata Kunci & Fakta (Memory)</span>
+                            </div>
+
+                            <div className="flex gap-2">
+                              <input 
+                                type="text"
+                                value={newKeyword}
+                                onChange={(e) => setNewKeyword(e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter' && newKeyword.trim()) {
+                                    const updated = [...keywords, { id: generateId('key'), keyword: newKeyword.trim(), isEnabled: true }];
+                                    setKeywords(updated);
+                                    localStorage.setItem('maria_keywords', JSON.stringify(updated));
+                                    setNewKeyword('');
+                                    if (user) {
+                                      import('firebase/firestore').then(async ({ doc, updateDoc }) => {
+                                        const { db } = await import('../lib/firebase');
+                                        if (db) {
+                                          await updateDoc(doc(db, 'users', user.uid), { keywords: updated });
+                                        }
+                                      });
+                                    }
+                                  }
+                                }}
+                                placeholder="Tambahkan fakta tentang Anda..."
+                                className={`flex-1 border rounded-xl px-4 py-3 text-sm font-bold outline-none ${isDark ? 'bg-slate-900 border-slate-800 text-white' : 'bg-slate-50 border-slate-100 text-slate-900'}`}
+                              />
+                              <button 
+                                onClick={() => {
+                                  if (newKeyword.trim()) {
+                                    const updated = [...keywords, { id: generateId('key'), keyword: newKeyword.trim(), isEnabled: true }];
+                                    setKeywords(updated);
+                                    localStorage.setItem('maria_keywords', JSON.stringify(updated));
+                                    setNewKeyword('');
+                                    if (user) {
+                                      import('firebase/firestore').then(async ({ doc, updateDoc }) => {
+                                        const { db } = await import('../lib/firebase');
+                                        if (db) {
+                                          await updateDoc(doc(db, 'users', user.uid), { keywords: updated });
+                                        }
+                                      });
+                                    }
+                                  }
+                                }}
+                                className="p-3 bg-brand-blue text-white rounded-xl hover:scale-105 active:scale-95 transition-all shadow-lg shadow-brand-blue/20"
+                              >
+                                <Plus size={20} />
+                              </button>
+                            </div>
+
+                            <div className="flex flex-wrap gap-2">
+                              {keywords.map((kw) => (
+                                <div 
+                                  key={kw.id} 
+                                  className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-bold border transition-all ${
+                                    isDark ? 'bg-slate-900 border-slate-800 hover:bg-slate-800' : 'bg-white border-slate-100 shadow-sm hover:border-brand-blue/20'
+                                  }`}
+                                >
+                                  <span>{kw.keyword}</span>
+                                  <button 
+                                    onClick={() => {
+                                      const updated = keywords.filter(k => k.id !== kw.id);
+                                      setKeywords(updated);
+                                      localStorage.setItem('maria_keywords', JSON.stringify(updated));
+                                      if (user) {
+                                        import('firebase/firestore').then(async ({ doc, updateDoc }) => {
+                                          const { db } = await import('../lib/firebase');
+                                          if (db) {
+                                            await updateDoc(doc(db, 'users', user.uid), { keywords: updated });
+                                          }
+                                        });
+                                      }
+                                    }}
+                                    className="p-1 hover:text-red-500 transition-colors"
+                                  >
+                                    <X size={12} />
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+
                             <button 
+                              onClick={() => {
+                                if (confirm('Apakah Anda yakin ingin menghapus semua memory Maria?')) {
+                                  setKeywords([]);
+                                  localStorage.setItem('maria_keywords', JSON.stringify([]));
+                                  if (user) {
+                                    import('firebase/firestore').then(async ({ doc, updateDoc }) => {
+                                      const { db } = await import('../lib/firebase');
+                                      if (db) {
+                                        await updateDoc(doc(db, 'users', user.uid), { keywords: [] });
+                                      }
+                                    });
+                                  }
+                                }
+                              }}
                               className={`w-full py-4 rounded-2xl text-xs font-black uppercase tracking-widest transition-all ${
                                 isDark 
                                 ? 'bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-white' 
@@ -929,7 +1090,7 @@ export default function UserProfile({ isOpen, onClose, onLanguageChange, isLiteM
                             >
                               {t.clearMemory}
                             </button>
-                            <p className="text-[9px] text-center mt-3 font-bold text-slate-400">Memory saat ini kosong atau sedang dikembangkan.</p>
+                            <p className="text-[9px] text-center mt-3 font-bold text-slate-400">Maria menggunakan data di atas untuk mengenal Anda lebih baik.</p>
                           </div>
                         </div>
                       </div>
@@ -1063,6 +1224,16 @@ export default function UserProfile({ isOpen, onClose, onLanguageChange, isLiteM
                                 setNewReminderTitle('');
                                 setNewReminderDateTime('');
                                 window.dispatchEvent(new Event('maria_refresh_system'));
+                                
+                                // Sync to Firebase profile
+                                if (user) {
+                                  import('firebase/firestore').then(async ({ doc, updateDoc }) => {
+                                    const { db } = await import('../lib/firebase');
+                                    if (db) {
+                                      await updateDoc(doc(db, 'users', user.uid), { reminders: updated });
+                                    }
+                                  });
+                                }
                               }}
                               className="w-full flex items-center justify-center gap-2 py-4 bg-brand-blue text-white rounded-xl text-xs font-black uppercase tracking-widest shadow-lg shadow-brand-blue/20 hover:scale-[1.01] active:scale-95 transition-all"
                             >
@@ -1099,6 +1270,16 @@ export default function UserProfile({ isOpen, onClose, onLanguageChange, isLiteM
                                     setReminders(updated);
                                     localStorage.setItem('maria_reminders', JSON.stringify(updated));
                                     window.dispatchEvent(new Event('maria_refresh_system'));
+                                    
+                                    // Sync to Firebase profile
+                                    if (user) {
+                                      import('firebase/firestore').then(async ({ doc, updateDoc }) => {
+                                        const { db } = await import('../lib/firebase');
+                                        if (db) {
+                                          await updateDoc(doc(db, 'users', user.uid), { reminders: updated });
+                                        }
+                                      });
+                                    }
                                   }}
                                   className={`p-2 rounded-xl transition-all ${isDark ? 'hover:bg-red-500/10 text-slate-700 hover:text-red-500' : 'hover:bg-red-50 text-slate-300 hover:text-red-500'}`}
                                 >

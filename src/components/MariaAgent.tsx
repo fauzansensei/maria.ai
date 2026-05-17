@@ -50,6 +50,7 @@ export default function MariaAgent({ chatId, language, userName, isFocusMode = f
   const t = getTranslation(language);
   const transition = isLiteMode ? { duration: 0.1 } : { duration: 0.5 };
   const [messages, setMessages] = useState<Message[]>([]);
+  const [isInitializing, setIsInitializing] = useState(true);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const deviceContext = useDeviceContext();
@@ -107,53 +108,92 @@ export default function MariaAgent({ chatId, language, userName, isFocusMode = f
 
     const loadChat = async () => {
       try {
+        // ALWAYS try local cache first for instant UI response (Stale-While-Revalidate)
         const historyStr = localStorage.getItem(`maria_history_${chatId}`);
         if (historyStr && historyStr !== 'null') {
-          const msgs = JSON.parse(historyStr);
-          if (Array.isArray(msgs) && msgs.length > 0) {
-            setMessages(msgs);
-            // We continue to set up snapshot for real-time updates even if we have local cache
-          }
+          try {
+            const msgs = JSON.parse(historyStr);
+            if (Array.isArray(msgs) && msgs.length > 0) {
+              setMessages(msgs);
+              // don't set initializing to false yet if we want a loader, but we have content
+            }
+          } catch(e) {}
         }
 
-        // Real-time Messages Listener
         const { auth } = await import('../lib/firebase');
         if (auth?.currentUser) {
-          const { collection, query, onSnapshot, orderBy } = await import('firebase/firestore');
+          const { collection, query, onSnapshot, orderBy, getDocs } = await import('firebase/firestore');
           const { db } = await import('../lib/firebase');
           if (db) {
-            const q = query(
-              collection(db, 'chats', chatId, 'messages'),
-              orderBy('timestamp', 'asc')
-            );
+            const messagesRef = collection(db, 'chats', chatId, 'messages');
+            const q = query(messagesRef, orderBy('timestamp', 'asc'));
             
+            // First check if collection exists/empty via one-time fetch to avoid flicker if it's truly empty
+            // GetDocs respects cache too.
+            const initialSnap = await getDocs(q).catch(() => null);
+            if (initialSnap && !initialSnap.empty) {
+               const initialRemoteMsgs = initialSnap.docs.map(doc => ({ id: doc.id, ...doc.data() } as any));
+               setMessages(initialRemoteMsgs);
+               setIsInitializing(false);
+            }
+
             unsubscribeMessages = onSnapshot(q, (snap) => {
               const remoteMsgs: Message[] = [];
-              snap.forEach(doc => remoteMsgs.push({ id: doc.id, ...doc.data() } as any));
+              snap.forEach(doc => {
+                const data = doc.data();
+                remoteMsgs.push({ id: doc.id, ...data } as any);
+              });
               
               if (remoteMsgs.length > 0) {
                 setMessages(remoteMsgs);
+                // PERSIST: Update local cache whenever we get remote messages to prevent "disappearing" on next mount
                 localStorage.setItem(`maria_history_${chatId}`, JSON.stringify(remoteMsgs));
+              } else if (initialSnap && (initialSnap as any).empty) {
+                // Truly a new chat with no messages
+                // ONLY set default messages if we don't already have messages from local cache
+                setMessages(prev => prev.length > 0 ? prev : [
+                  {
+                    id: 'welcome',
+                    role: 'assistant',
+                    content: t.welcome,
+                    timestamp: Date.now(),
+                  },
+                ]);
               }
-            }, (err) => console.error("Messages snapshot error:", err));
+              setIsInitializing(false);
+            }, (err: any) => {
+              console.error("Messages snapshot error:", err);
+              // Handle Permission Denied gracefully during migration
+              if (err.code === 'permission-denied') {
+                console.warn("Maria: Permission denied for messages, keeping current state.");
+              }
+              setIsInitializing(false);
+            });
+          } else {
+            setIsInitializing(false);
           }
+        } else {
+          // NOT LOGGED IN
+          const historyStr = localStorage.getItem(`maria_history_${chatId}`);
+          if (historyStr && historyStr !== 'null') {
+            try {
+              const msgs = JSON.parse(historyStr);
+              if (Array.isArray(msgs) && msgs.length > 0) {
+                setMessages(msgs);
+              } else {
+                setMessages([{ id: 'welcome', role: 'assistant', content: t.welcome, timestamp: Date.now() }]);
+              }
+            } catch(e) {
+               setMessages([{ id: 'welcome', role: 'assistant', content: t.welcome, timestamp: Date.now() }]);
+            }
+          } else {
+            setMessages([{ id: 'welcome', role: 'assistant', content: t.welcome, timestamp: Date.now() }]);
+          }
+          setIsInitializing(false);
         }
       } catch (e) {
         console.error("Failed to load chat history", e);
-      }
-      
-      // Initial empty state if not in local and no user
-      const currentHistory = localStorage.getItem(`maria_history_${chatId}`);
-      if (!currentHistory || currentHistory === 'null') {
-        const defaultMessages: Message[] = [
-          {
-            id: 'welcome',
-            role: 'assistant',
-            content: t.welcome,
-            timestamp: Date.now(),
-          },
-        ];
-        setMessages(defaultMessages);
+        setIsInitializing(false);
       }
     };
 
@@ -710,6 +750,17 @@ export default function MariaAgent({ chatId, language, userName, isFocusMode = f
       {/* Dynamic Messages Container */}
       <div className={`flex-1 overflow-y-auto px-4 sm:px-6 md:px-10 lg:px-20 py-6 sm:py-10 space-y-8 sm:space-y-12 custom-scrollbar transition-all duration-700 ${isFocusMode ? 'pt-24' : ''}`}>
         <AnimatePresence initial={false}>
+          {isInitializing && messages.length <= 1 && messages[0]?.id === 'welcome' && (
+            <motion.div 
+               initial={{ opacity: 0 }}
+               animate={{ opacity: 1 }}
+               exit={{ opacity: 0 }}
+               className="flex flex-col items-center justify-center py-20 opacity-30 gap-3"
+            >
+              <RefreshCw className="animate-spin text-brand-blue" size={24} />
+              <p className="text-[10px] font-black uppercase tracking-widest">{language === 'en' ? 'Synchronizing History...' : 'Menyelaraskan Riwayat...'}</p>
+            </motion.div>
+          )}
           {messages.map((msg) => (
             <MessageItem 
               key={msg.id}
