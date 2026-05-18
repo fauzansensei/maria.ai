@@ -328,7 +328,7 @@ function MainApp() {
                     setLanguage(profile.preferences.language);
                   }
                   
-                  if (profile.onboardingCompleted === false) {
+                  if (profile.onboardingCompleted !== true) {
                     setShowOnboarding(true);
                   } else {
                     setShowOnboarding(false);
@@ -342,6 +342,7 @@ function MainApp() {
                     email: currentUser.email || '',
                     avatar: currentUser.photoURL || null,
                     joinedDate: new Date().toLocaleDateString('id-ID'),
+                    birthday: '',
                     isPlus: false,
                     quotaResetAt: 0,
                     onboardingCompleted: false,

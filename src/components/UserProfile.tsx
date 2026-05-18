@@ -11,6 +11,7 @@ import LegalDocs, { LegalDocType } from './LegalDocs';
 interface UserProfileData {
   name: string;
   email: string;
+  birthday?: string;
   avatar?: string;
   joinedDate: string;
   isPlus: boolean;
@@ -645,7 +646,25 @@ export default function UserProfile({ isOpen, onClose, onLanguageChange, isLiteM
                             </div>
 
                             <div className="flex flex-col gap-2">
-                              <label className={`text-sm font-black uppercase tracking-widest ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>Email</label>
+                               <label className={`text-sm font-black uppercase tracking-widest ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>{t.dateTime || 'Tanggal Lahir'}</label>
+                               <input 
+                                 type="date" 
+                                 value={profile.birthday || ''}
+                                 onChange={(e) => {
+                                   const next = {...profile, birthday: e.target.value};
+                                   setProfile(next);
+                                   saveProfile(next);
+                                 }}
+                                 className={`w-full border rounded-xl px-4 py-3.5 text-sm font-bold outline-none focus:ring-4 transition-all ${
+                                   isDark 
+                                   ? 'bg-slate-900 border-slate-800 text-white focus:ring-brand-blue/20' 
+                                   : 'bg-slate-50 border-slate-100 text-slate-900 focus:ring-brand-blue/5'
+                                 }`}
+                               />
+                             </div>
+
+                             <div className="flex flex-col gap-2">
+                               <label className={`text-sm font-black uppercase tracking-widest ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>Email</label>
                               <input 
                                 type="email" 
                                 value={profile.email}

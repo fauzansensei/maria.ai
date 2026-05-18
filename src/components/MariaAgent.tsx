@@ -490,14 +490,14 @@ export default function MariaAgent({ chatId, language, userName, user, isFocusMo
     } catch (error: any) {
       console.error(error);
       
-    const isQuotaExceeded = error?.message?.toLowerCase().includes("429") || 
+    const isQuotaExceeded = error?.status === 429 || 
+                            error?.message?.toLowerCase().includes("limit reached") ||
                             error?.message?.toLowerCase().includes("quota") || 
                             error?.message?.toLowerCase().includes("kuota") || 
                             error?.message?.toLowerCase().includes("resource_exhausted") ||
                             error?.status === "RESOURCE_EXHAUSTED" ||
                             error?.error?.status === "RESOURCE_EXHAUSTED" ||
-                            error?.error?.code === 429 ||
-                            (error instanceof Error && error.message.toLowerCase().includes("resource_exhausted"));
+                            error?.error?.code === 429;
 
       if (isQuotaExceeded) {
         // Calculate reset time (until next midnight)
@@ -973,7 +973,7 @@ export default function MariaAgent({ chatId, language, userName, user, isFocusMo
                             ref={textareaRef}
                             value={input}
                             onClick={() => {
-                              if (quotaExhausted && !isPlus) setShowQuotaModal(true);
+                                // Quota check is handled on submit
                             }}
                             onChange={(e) => setInput(e.target.value)}
                             onKeyDown={(e) => {

@@ -166,8 +166,13 @@ MARIA CORE INTEGRITY PROTOCOL:
         throw new Error(errorData.error || `Server responded with ${response.status}`);
       } else {
         const textError = await response.text();
-        console.error("Server returned non-JSON error:", textError);
-        throw new Error(`Server error (${response.status}): Maria sedang pemeliharaan atau terjadi kendala pada sistem.`);
+        console.error("Server returned non-JSON error:", textError.substring(0, 500));
+        
+        if (response.status === 429) {
+           throw new Error("429: Quota Limit Reached. Silakan coba lagi nanti.");
+        }
+        
+        throw new Error(`Server error (${response.status}): Maria sedang pemeliharaan atau terjadi kendala pada sistem. [ERR_HTML_RESP]`);
       }
     }
 
