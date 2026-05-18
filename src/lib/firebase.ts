@@ -115,10 +115,18 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
   throw new Error(JSON.stringify(errInfo));
 }
 
+let isSignInProgress = false;
+
 export const loginWithGoogle = async () => {
   if (!auth) throw new Error("Firebase Auth not initialized");
   if (!googleProvider) throw new Error("Google Provider not initialized");
   
+  if (isSignInProgress) {
+    console.warn("Maria AI: Sign-in already in progress.");
+    return null;
+  }
+
+  isSignInProgress = true;
   try {
     const result = await signInWithPopup(auth, googleProvider);
     return result.user;
@@ -127,8 +135,14 @@ export const loginWithGoogle = async () => {
       console.log("Maria AI: Login popup closed by user. No action taken.");
       return null;
     }
+    if (error.code === 'auth/cancelled-popup-request') {
+      console.log("Maria AI: Multiple sign-in requests detected. Existing request cancelled.");
+      return null;
+    }
     console.error("Maria AI: Error signing in with Google", error);
     throw error;
+  } finally {
+    isSignInProgress = false;
   }
 };
 

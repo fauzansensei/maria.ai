@@ -125,6 +125,7 @@ export default function UserProfile({ isOpen, onClose, onLanguageChange, isLiteM
   const [newKeyword, setNewKeyword] = useState('');
   const [newReminderTitle, setNewReminderTitle] = useState('');
   const [newReminderDateTime, setNewReminderDateTime] = useState('');
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
 
   const [activeTab, setActiveTab] = useState<'umum' | 'profil' | 'privasi' | 'personalisasi' | 'memory' | 'notifikasi' | 'jadwal'>('umum');
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -1320,29 +1321,39 @@ export default function UserProfile({ isOpen, onClose, onLanguageChange, isLiteM
 
               {user ? (
                 <button 
+                  disabled={isLoggingIn}
                   onClick={async () => {
                     await logout();
                     onClose();
                   }}
-                  className="w-full sm:w-auto px-10 py-4 bg-red-500/10 text-red-500 rounded-2xl text-sm font-black uppercase tracking-widest border border-red-500/20 hover:bg-red-500 hover:text-white transition-all shadow-lg shadow-red-500/10 flex items-center justify-center gap-2"
+                  className="w-full sm:w-auto px-10 py-4 bg-red-500/10 text-red-500 rounded-2xl text-sm font-black uppercase tracking-widest border border-red-500/20 hover:bg-red-500 hover:text-white transition-all shadow-lg shadow-red-500/10 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <LogOut size={18} />
                   {t.logout}
                 </button>
               ) : (
                 <button 
+                  disabled={isLoggingIn}
                   onClick={async () => {
+                    if (isLoggingIn) return;
+                    setIsLoggingIn(true);
                     try {
                       await loginWithGoogle();
                       onClose();
                     } catch (e) {
                       console.error(e);
+                    } finally {
+                      setIsLoggingIn(false);
                     }
                   }}
-                  className="w-full sm:w-auto px-10 py-4 bg-gradient-to-r from-[#021B2B] to-[#0E4D54] text-white rounded-2xl text-sm font-black uppercase tracking-widest shadow-xl shadow-teal-900/20 hover:scale-[1.02] active:scale-95 transition-all flex items-center justify-center gap-2"
+                  className="w-full sm:w-auto px-10 py-4 bg-gradient-to-r from-[#021B2B] to-[#0E4D54] text-white rounded-2xl text-sm font-black uppercase tracking-widest shadow-xl shadow-teal-900/20 hover:scale-[1.02] active:scale-95 transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="Google" className="w-5 h-5" />
-                  {t.loginGoogle}
+                  {isLoggingIn ? (
+                    <RotateCcw className="w-5 h-5 animate-spin" />
+                  ) : (
+                    <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="Google" className="w-5 h-5" />
+                  )}
+                  {isLoggingIn ? 'Logging in...' : t.loginGoogle}
                 </button>
               )}
             </footer>
