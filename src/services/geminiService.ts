@@ -160,8 +160,15 @@ MARIA CORE INTEGRITY PROTOCOL:
     clearTimeout(timeoutId);
 
     if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(errorData.error || `Server responded with ${response.status}`);
+      const contentType = response.headers.get("content-type");
+      if (contentType && contentType.includes("application/json")) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || `Server responded with ${response.status}`);
+      } else {
+        const textError = await response.text();
+        console.error("Server returned non-JSON error:", textError);
+        throw new Error(`Server error (${response.status}): Maria sedang pemeliharaan atau terjadi kendala pada sistem.`);
+      }
     }
 
     const data = await response.json();

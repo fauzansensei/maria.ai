@@ -24,16 +24,6 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
 
-  // Initialize Gemini with server-side key
-  const genAI = new GoogleGenAI({ 
-    apiKey: process.env.GEMINI_API_KEY || '',
-    httpOptions: {
-      headers: {
-        'User-Agent': 'aistudio-build',
-      }
-    }
-  });
-
   app.use(express.json({ limit: '20mb' }));
 
   // API Routes
@@ -45,18 +35,30 @@ async function startServer() {
     try {
       const { contents, systemInstruction, temperature, topP } = req.body;
 
-      const effectiveApiKey = process.env.GEMINI_API_KEY || '';
-      const ai = new GoogleGenAI({ apiKey: effectiveApiKey });
+      // Always use the server-side API key
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (!apiKey) {
+        return res.status(500).json({ error: "GEMINI_API_KEY is not configured on server." });
+      }
 
+      const ai = new GoogleGenAI({ 
+        apiKey,
+        httpOptions: {
+          headers: {
+            'User-Agent': 'aistudio-build',
+          }
+        }
+      });
+
+      // Use gemini-3-flash-preview as per skill recommendation
       const response = await ai.models.generateContent({
-        model: "gemini-2.0-flash",
+        model: "gemini-3-flash-preview",
         contents,
         config: {
           systemInstruction,
           temperature: temperature || 0.7,
           topP: topP || 0.9,
-          // Gemini 2.0 SDK uses googleSearch (camelCase)
-          tools: [{ googleSearch: {} }] as any,
+          tools: [{ googleSearch: {} }],
         }
       });
 
@@ -84,7 +86,8 @@ async function startServer() {
 
       res.status(500).json({ 
         error: "Terjadi kesalahan pada server Maria. Mohon coba lagi.",
-        status: error.status || "UNKNOWN"
+        status: error.status || "UNKNOWN",
+        details: safeErrorMessage
       });
     }
   });
