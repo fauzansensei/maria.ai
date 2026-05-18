@@ -43,69 +43,20 @@ interface WeatherData {
 export default function MultiUtilityWidget({ isDark = false, language = 'id' }: { isDark?: boolean, language?: string }) {
   const t = getTranslation(language);
   const deviceContext = useDeviceContext();
-  const [weather, setWeather] = useState<WeatherData | null>(() => {
-    const cached = localStorage.getItem('weather_data');
-    if (cached) {
-      try {
-        const parsed = JSON.parse(cached);
-        // If data is older than 30 minutes, we'll suggest refreshing, but keep showing cached for now
-        return parsed;
-      } catch (e) {
-        return null;
-      }
-    }
-    return null;
-  });
-  
-  const [savedCity, setSavedCity] = useState<string | null>(() => localStorage.getItem('weather_city'));
+  const [weather, setWeather] = useState<WeatherData | null>(null);
+  const [savedCity, setSavedCity] = useState<string | null>(null);
   const [showDetails, setShowDetails] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
   const [searchValue, setSearchValue] = useState('');
   const [isSearching, setIsSearching] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
-  const [lastUpdated, setLastUpdated] = useState<string | null>(() => {
-    const cached = localStorage.getItem('weather_data');
-    if (cached) {
-      const parsed = JSON.parse(cached);
-      return parsed.timestamp ? new Date(parsed.timestamp).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) : null;
-    }
-    return null;
-  });
+  const [lastUpdated, setLastUpdated] = useState<string | null>(null);
 
   useEffect(() => {
-    // Auto-refresh weather if location exists and data is stale
-    const city = localStorage.getItem('weather_city');
-    const cachedData = localStorage.getItem('weather_data');
-    let isStale = true;
-    if (cachedData) {
-      try {
-        const parsed = JSON.parse(cachedData);
-        // Reduced to 10 minutes for better responsiveness
-        isStale = Date.now() - (parsed.timestamp || 0) > 10 * 60 * 1000;
-      } catch (e) {
-        isStale = true;
-      }
-    }
-
-    const checkAndRefresh = () => {
-      const currentCity = localStorage.getItem('weather_city');
-      const data = localStorage.getItem('weather_data');
-      if (currentCity && data) {
-        try {
-          const parsed = JSON.parse(data);
-          if (Date.now() - (parsed.timestamp || 0) > 10 * 60 * 1000) {
-            fetchWeather(currentCity);
-          }
-        } catch (e) {
-          fetchWeather(currentCity);
-        }
-      }
-    };
-
-    if (city && isStale) {
-        fetchWeather(city);
-    } else if (!city) {
-      // Try to get user location if no city saved
+    // Rely on memory only, per "no local host/storage" request
+    if (savedCity) {
+      fetchWeather(savedCity);
+    } else {
       if ("geolocation" in navigator) {
         navigator.geolocation.getCurrentPosition(async (pos) => {
           try {
@@ -114,25 +65,10 @@ export default function MultiUtilityWidget({ isDark = false, language = 'id' }: 
             const data = await res.json();
             const cityName = data.address.city || data.address.town || data.address.village;
             if (cityName) fetchWeather(cityName);
-          } catch (err) {
-            // Silently fail or log quietly for developer
-            console.warn("Maria: Reverse geocoding failed", err);
-          }
-        }, (err) => {
-          // Handle permission denial gracefully without big warnings
-          if (err.code !== err.PERMISSION_DENIED) {
-            console.warn("Maria: Geolocation failed", err);
-          }
-        });
+          } catch (err) {}
+        }, () => {});
       }
     }
-
-    // Check for updates every 5 minutes
-    const refreshInterval = setInterval(checkAndRefresh, 5 * 60 * 1000);
-
-    return () => {
-      clearInterval(refreshInterval);
-    };
   }, []);
 
   async function fetchWeather(city: string) {
@@ -211,8 +147,6 @@ export default function MultiUtilityWidget({ isDark = false, language = 'id' }: 
         setWeather(newWeather);
         setSavedCity(name);
         setLastUpdated(new Date(now).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }));
-        localStorage.setItem('weather_city', name);
-        localStorage.setItem('weather_data', JSON.stringify(newWeather));
         setShowSearch(false);
       } else {
         // Fallback to Open-Meteo
@@ -274,8 +208,6 @@ export default function MultiUtilityWidget({ isDark = false, language = 'id' }: 
         setWeather(newWeather);
         setSavedCity(cityShortName);
         setLastUpdated(new Date(now).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }));
-        localStorage.setItem('weather_city', cityShortName);
-        localStorage.setItem('weather_data', JSON.stringify(newWeather));
         setShowSearch(false);
       }
     } catch (e) {
@@ -293,8 +225,6 @@ export default function MultiUtilityWidget({ isDark = false, language = 'id' }: 
   };
 
   const clearCity = () => {
-    localStorage.removeItem('weather_city');
-    localStorage.removeItem('weather_data');
     setSavedCity(null);
     setWeather(null);
   };

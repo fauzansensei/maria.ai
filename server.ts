@@ -4,8 +4,18 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { GoogleGenAI } from "@google/genai";
 import dotenv from "dotenv";
+import admin from "firebase-admin";
 
 dotenv.config();
+
+// Initialize Firebase Admin
+if (!admin.apps.length) {
+  try {
+    admin.initializeApp();
+  } catch (e) {
+    console.warn("Maria Server: Firebase Admin failed to initialize naturally. Check credentials.", e);
+  }
+}
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -33,12 +43,34 @@ async function startServer() {
 
   app.post("/api/maria", async (req, res) => {
     try {
-      const { contents, systemInstruction, temperature, topP, customApiKey } = req.body;
+      const { contents, systemInstruction, temperature, topP, customApiKey, firebaseToken } = req.body;
 
-      let ai = genAI;
-      if (customApiKey) {
-        ai = new GoogleGenAI({ apiKey: customApiKey });
+      let effectiveApiKey = process.env.GEMINI_API_KEY || '';
+      
+      // If user provided a token, check for a paid key in their profile PREFERRING the cloud storage over the request body
+      if (firebaseToken && admin.apps.length) {
+        try {
+          const decodedToken = await admin.auth().verifyIdToken(firebaseToken);
+          const userDoc = await admin.firestore().collection('users').doc(decodedToken.uid).get();
+          if (userDoc.exists) {
+            const data = userDoc.data();
+            // Only use custom key if user isPlus has it
+            if (data?.isPlus && data?.preferences?.paidApiKey) {
+              effectiveApiKey = data.preferences.paidApiKey;
+            }
+          }
+        } catch (e) {
+          console.warn("Maria Server: Firebase token verification failed", e);
+        }
       }
+
+      // Fallback to customApiKey from body if NO token was provided (legacy support or dev)
+      // but prioritize the cloud-fetched key.
+      if (!firebaseToken && customApiKey) {
+        effectiveApiKey = customApiKey;
+      }
+
+      const ai = new GoogleGenAI({ apiKey: effectiveApiKey });
 
       const response = await ai.models.generateContent({
         model: "gemini-2.0-flash",
@@ -47,8 +79,7 @@ async function startServer() {
           systemInstruction,
           temperature: temperature || 0.7,
           topP: topP || 0.9,
-          // googleSearch tool naming might vary between SDK versions, 
-          // ensure compatibility with the new @google/genai v2.
+          // googleSearch tool naming might vary between SDK versions
           tools: [{ google_search: {} }] as any,
         }
       });
@@ -58,7 +89,9 @@ async function startServer() {
         groundingMetadata: response.candidates?.[0]?.groundingMetadata 
       });
     } catch (error: any) {
-      console.error("Maria Server API Error:", error);
+      // SCRUB ERROR: Prevent leaking keys in logs
+      const safeErrorMessage = error.message?.replace(/[A-Za-z0-9_-]{35,}/g, '[REDACTED_KEY]');
+      console.error("Maria Server API Error:", safeErrorMessage || "Unknown Error");
       
       const isQuotaError = error.status === 429 || 
                           error.message?.toLowerCase().includes("429") || 
@@ -68,13 +101,13 @@ async function startServer() {
 
       if (isQuotaError) {
         return res.status(429).json({
-          error: "Kuota API Gemini telah habis. Silakan coba lagi nanti atau hubungkan kunci API berbayar di Settings.",
+          error: "Kuota API Gemini telah habis atau limit harian tercapai. Silakan coba lagi nanti atau hubungkan kunci API berbayar di Settings.",
           status: "RESOURCE_EXHAUSTED"
         });
       }
 
       res.status(500).json({ 
-        error: error.message || "Internal Server Error",
+        error: "Terjadi kesalahan pada server Maria. Mohon coba lagi.",
         status: error.status || "UNKNOWN"
       });
     }

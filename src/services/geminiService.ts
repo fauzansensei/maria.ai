@@ -22,7 +22,7 @@ export async function askMaria(
   prompt: string, 
   languageCode: string, 
   images?: MariaImage[], 
-  preferences?: { personality?: string; guardrailsEnabled?: boolean; customApiKey?: string },
+  preferences?: { personality?: string; guardrailsEnabled?: boolean; customApiKey?: string; firebaseToken?: string },
   context?: DeviceContext,
   userName?: string,
   history: any[] = [],
@@ -152,7 +152,8 @@ MARIA CORE INTEGRITY PROTOCOL:
         systemInstruction,
         temperature: 0.7,
         topP: 0.9,
-        customApiKey: preferences?.customApiKey
+        customApiKey: preferences?.customApiKey,
+        firebaseToken: preferences?.firebaseToken
       })
     });
 

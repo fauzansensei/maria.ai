@@ -1,7 +1,7 @@
 import { Message } from '../types';
 import { X, Trash2, Copy, ExternalLink, Check } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { copyToClipboard } from '../lib/clipboard';
 
 interface SavedItemsProps {
@@ -11,20 +11,41 @@ interface SavedItemsProps {
 
 export default function SavedItems({ isOpen, onClose }: SavedItemsProps) {
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [savedItems, setSavedItems] = useState<Message[]>([]);
 
-  const getSaved = (): Message[] => {
-    const saved = localStorage.getItem('maria_saved_info');
-    return saved ? JSON.parse(saved) : [];
+  useEffect(() => {
+    if (!isOpen) return;
+
+    let unsub = () => {};
+    const setupListener = async () => {
+      const { auth } = await import('../lib/firebase');
+      if (auth?.currentUser) {
+        const { doc, onSnapshot } = await import('firebase/firestore');
+        const { db } = await import('../lib/firebase');
+        if (db) {
+          unsub = onSnapshot(doc(db, 'users', auth.currentUser.uid), (snap) => {
+            if (snap.exists()) {
+              setSavedItems(snap.data().savedInfo || []);
+            }
+          });
+        }
+      }
+    };
+    setupListener();
+    return () => unsub();
+  }, [isOpen]);
+
+  const removeSaved = async (id: string) => {
+    const { auth } = await import('../lib/firebase');
+    if (auth?.currentUser) {
+      const { doc, updateDoc } = await import('firebase/firestore');
+      const { db } = await import('../lib/firebase');
+      if (db) {
+        const updated = savedItems.filter(m => m.id !== id);
+        await updateDoc(doc(db, 'users', auth.currentUser.uid), { savedInfo: updated });
+      }
+    }
   };
-
-  const removeSaved = (id: string) => {
-    const saved = getSaved();
-    const filtered = saved.filter(m => m.id !== id);
-    localStorage.setItem('maria_saved_info', JSON.stringify(filtered));
-    window.dispatchEvent(new Event('storage')); // Trigger update if needed
-  };
-
-  const savedItems = getSaved();
 
   return (
     <AnimatePresence>

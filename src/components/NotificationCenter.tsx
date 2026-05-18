@@ -21,28 +21,13 @@ export default function NotificationCenter({ isDark, isOpen, onClose }: Notifica
     try {
       const { auth } = await import('../lib/firebase');
       if (auth?.currentUser) {
-        // We handle real-time sync via useEffect elsewhere to avoid duplication
+        // Data is handled by Firebase listeners
         return;
       }
-
-      const savedNotifications = localStorage.getItem('maria_notifications');
-      const savedReminders = localStorage.getItem('maria_reminders');
-      const savedKeywords = localStorage.getItem('maria_keywords');
-
-      if (savedNotifications && savedNotifications !== 'null' && savedNotifications !== 'undefined') {
-        const notifs = JSON.parse(savedNotifications);
-        if (Array.isArray(notifs)) setNotifications(notifs);
-      }
-      
-      if (savedReminders && savedReminders !== 'null' && savedReminders !== 'undefined') {
-        const rems = JSON.parse(savedReminders);
-        if (Array.isArray(rems)) setReminders(rems);
-      }
-      
-      if (savedKeywords && savedKeywords !== 'null' && savedKeywords !== 'undefined') {
-        const kws = JSON.parse(savedKeywords);
-        if (Array.isArray(kws)) setKeywords(kws);
-      }
+      // Non-logged in: show nothing or limited state
+      setNotifications([]);
+      setReminders([]);
+      setKeywords([]);
     } catch (e) {
       console.error("Maria: Failed to load notification data", e);
     }
@@ -50,7 +35,6 @@ export default function NotificationCenter({ isDark, isOpen, onClose }: Notifica
 
   useEffect(() => {
     loadData();
-    window.addEventListener('storage', loadData);
     window.addEventListener('maria_new_notification', loadData);
     
     // Auth-based Listener
@@ -93,7 +77,6 @@ export default function NotificationCenter({ isDark, isOpen, onClose }: Notifica
     setupFirebaseListeners();
 
     return () => {
-      window.removeEventListener('storage', loadData);
       window.removeEventListener('maria_new_notification', loadData);
       unsubs.forEach(fn => fn());
     };
@@ -118,10 +101,6 @@ export default function NotificationCenter({ isDark, isOpen, onClose }: Notifica
             ...notifData,
             userId: auth.currentUser.uid
           });
-        } else {
-          const existingNotifs = JSON.parse(localStorage.getItem('maria_notifications') || '[]');
-          existingNotifs.unshift(notifData);
-          localStorage.setItem('maria_notifications', JSON.stringify(existingNotifs.slice(0, 50)));
         }
         window.dispatchEvent(new Event('maria_new_notification'));
       };
@@ -157,8 +136,6 @@ export default function NotificationCenter({ isDark, isOpen, onClose }: Notifica
           if (db) {
             await updateDoc(doc(db, 'users', auth.currentUser.uid), { reminders: updatedReminders });
           }
-        } else {
-          localStorage.setItem('maria_reminders', JSON.stringify(updatedReminders));
         }
         setReminders(updatedReminders);
       }
@@ -175,10 +152,6 @@ export default function NotificationCenter({ isDark, isOpen, onClose }: Notifica
       if (db) {
         await updateDoc(doc(db, 'notifications', id), { isRead: true });
       }
-    } else {
-      const updated = notifications.map(n => n.id === id ? { ...n, isRead: true } : n);
-      setNotifications(updated);
-      localStorage.setItem('maria_notifications', JSON.stringify(updated));
     }
   };
 
@@ -191,10 +164,6 @@ export default function NotificationCenter({ isDark, isOpen, onClose }: Notifica
       if (db) {
         await deleteDoc(doc(db, 'notifications', id));
       }
-    } else {
-      const updated = notifications.filter(n => n.id !== id);
-      setNotifications(updated);
-      localStorage.setItem('maria_notifications', JSON.stringify(updated));
     }
   };
 
@@ -210,9 +179,6 @@ export default function NotificationCenter({ isDark, isOpen, onClose }: Notifica
         snap.forEach(d => batch.delete(d.ref));
         await batch.commit();
       }
-    } else {
-      setNotifications([]);
-      localStorage.setItem('maria_notifications', JSON.stringify([]));
     }
   };
 

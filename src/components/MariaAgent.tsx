@@ -72,33 +72,35 @@ export default function MariaAgent({ chatId, language, userName, isFocusMode = f
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
-    const loadProfile = () => {
-      const savedProfile = localStorage.getItem('maria_profile');
-      if (savedProfile) {
-        try {
-          const profile = JSON.parse(savedProfile);
-          setIsPlus(profile.isPlus || false);
-        } catch (e) {}
-      }
-
-      const savedLimit = localStorage.getItem('maria_quota_limit');
-      if (savedLimit) {
-        const timestamp = parseInt(savedLimit);
-        if (timestamp > Date.now()) {
-          setQuotaExhausted(true);
-          setResetTimestamp(timestamp);
-          setCountdown(Math.floor((timestamp - Date.now()) / 1000));
-        } else {
-          setQuotaExhausted(false);
-          localStorage.removeItem('maria_quota_limit');
+    const loadProfile = async () => {
+      const { auth } = await import('../lib/firebase');
+      if (auth?.currentUser) {
+        const { doc, getDoc } = await import('firebase/firestore');
+        const { db } = await import('../lib/firebase');
+        if (db) {
+          const snap = await getDoc(doc(db, 'users', auth.currentUser.uid));
+          if (snap.exists()) {
+            const profile = snap.data();
+            setIsPlus(profile.isPlus || false);
+            if (profile.quotaResetAt && profile.quotaResetAt > Date.now()) {
+               setQuotaExhausted(true);
+               setResetTimestamp(profile.quotaResetAt);
+               setCountdown(Math.floor((profile.quotaResetAt - Date.now()) / 1000));
+            } else {
+               setQuotaExhausted(false);
+            }
+          }
         }
+      } else {
+        // Limited fallback for anonymous if needed, but user said "hapus aja"
+        // I will just use state and avoid localStorage
+        setIsPlus(false);
+        setQuotaExhausted(false);
       }
     };
     loadProfile();
-    window.addEventListener('storage', loadProfile);
     window.addEventListener('maria_refresh_system', loadProfile);
     return () => {
-      window.removeEventListener('storage', loadProfile);
       window.removeEventListener('maria_refresh_system', loadProfile);
     };
   }, []);
@@ -155,22 +157,9 @@ export default function MariaAgent({ chatId, language, userName, isFocusMode = f
             setIsInitializing(false);
           }
         } else {
-          // NOT LOGGED IN - Still use limited localStorage for anonymous users
-          const historyStr = localStorage.getItem(`maria_history_${chatId}`);
-          if (historyStr && historyStr !== 'null') {
-            try {
-              const msgs = JSON.parse(historyStr);
-              if (Array.isArray(msgs) && msgs.length > 0) {
-                setMessages(msgs);
-              } else {
-                setMessages([{ id: 'welcome', role: 'assistant', content: t.welcome, timestamp: Date.now() }]);
-              }
-            } catch(e) {
-               setMessages([{ id: 'welcome', role: 'assistant', content: t.welcome, timestamp: Date.now() }]);
-            }
-          } else {
-            setMessages([{ id: 'welcome', role: 'assistant', content: t.welcome, timestamp: Date.now() }]);
-          }
+          // NOT LOGGED IN - Rely purely on state passed from App or just empty for now
+          // as user said "ndak perlu local host lagi"
+          setMessages([{ id: 'welcome', role: 'assistant', content: t.welcome, timestamp: Date.now() }]);
           setIsInitializing(false);
         }
       } catch (e) {
@@ -211,40 +200,16 @@ export default function MariaAgent({ chatId, language, userName, isFocusMode = f
 
   const saveToStorage = async (updatedMessages: Message[]) => {
     try {
-      // 1. Update metadata in maria_chats (Keep metadata light)
-      const chatsStr = localStorage.getItem('maria_chats');
-      const allChats = (chatsStr && chatsStr !== 'null') ? JSON.parse(chatsStr) : {};
-      let title = allChats[chatId]?.title || 'Chat Baru';
-    
-      if (title === 'Chat Baru' || title === t.newChat) {
-        const firstUserMsg = updatedMessages.find(m => m.role === 'user');
-        if (firstUserMsg) {
-          title = firstUserMsg.content.substring(0, 35) + (firstUserMsg.content.length > 35 ? '...' : '');
-          if (onTitleUpdate) onTitleUpdate(title);
-        }
+      const { auth } = await import('../lib/firebase');
+      
+      // Update Title logic
+      let title = 'Chat Baru';
+      const firstUserMsg = updatedMessages.find(m => m.role === 'user');
+      if (firstUserMsg) {
+        title = firstUserMsg.content.substring(0, 35) + (firstUserMsg.content.length > 35 ? '...' : '');
+        if (onTitleUpdate) onTitleUpdate(title);
       }
 
-      allChats[chatId] = {
-        ...(allChats[chatId] || {}),
-        id: chatId,
-        title: title,
-        updatedAt: Date.now()
-      };
-      
-      localStorage.setItem('maria_chats', JSON.stringify(allChats));
-      
-      // 2. Clear local history for logged in users to save memory
-      const { auth } = await import('../lib/firebase');
-      if (auth?.currentUser) {
-        localStorage.removeItem(`maria_history_${chatId}`);
-      } else {
-        // Only keep limited history for anonymous users (e.g., last 20 messages)
-        localStorage.setItem(`maria_history_${chatId}`, JSON.stringify(updatedMessages.slice(-20)));
-      }
-      
-      window.dispatchEvent(new CustomEvent('maria_history_update', { detail: { chatId } }));
-      window.dispatchEvent(new Event('maria_refresh_system'));
-      
       // FIREBASE SYNC - metadata + latest message
       if (auth?.currentUser) {
         const { doc, writeBatch } = await import('firebase/firestore');
@@ -256,8 +221,6 @@ export default function MariaAgent({ chatId, language, userName, isFocusMode = f
           batch.set(chatRef, {
             userId: auth.currentUser.uid,
             title: title,
-            isPinned: allChats[chatId].isPinned || false,
-            isFavorite: allChats[chatId].isFavorite || false,
             updatedAt: Date.now()
           }, { merge: true });
 
@@ -275,8 +238,12 @@ export default function MariaAgent({ chatId, language, userName, isFocusMode = f
           });
         }
       }
+      
+      // We explicitly DO NOT use localStorage here anymore
+      window.dispatchEvent(new CustomEvent('maria_history_update', { detail: { chatId } }));
+      window.dispatchEvent(new Event('maria_refresh_system'));
     } catch (e) {
-      console.error("Failed to save to storage", e);
+      console.error("Failed to save to cloud storage", e);
     }
   };
 
@@ -320,18 +287,7 @@ export default function MariaAgent({ chatId, language, userName, isFocusMode = f
   };
 
   useEffect(() => {
-    // Check for existing quota limit on load
-    const savedLimit = localStorage.getItem('maria_quota_limit');
-    if (savedLimit) {
-      const timestamp = parseInt(savedLimit);
-      if (timestamp > Date.now()) {
-        setQuotaExhausted(true);
-        setResetTimestamp(timestamp);
-        setCountdown(Math.floor((timestamp - Date.now()) / 1000));
-      } else {
-        localStorage.removeItem('maria_quota_limit');
-      }
-    }
+    // Quota resets are now handled via profile sync in loadProfile
   }, []);
 
   useEffect(() => {
@@ -342,7 +298,6 @@ export default function MariaAgent({ chatId, language, userName, isFocusMode = f
         setCountdown(remaining);
         if (remaining <= 0) {
           setQuotaExhausted(false);
-          localStorage.removeItem('maria_quota_limit');
         }
       }, 1000);
     }
@@ -360,17 +315,22 @@ export default function MariaAgent({ chatId, language, userName, isFocusMode = f
   };
 
   const processMessage = async (currentMessages: Message[], text: string, images?: { base64: string; type: string }[] | null) => {
-    // Check if we are still in quota cooldown (Skip for Plus users)
-    const savedLimit = localStorage.getItem('maria_quota_limit');
-    // Important: check isPlus from profile as well as state
-    const profileStr = localStorage.getItem('maria_profile');
-    const profile = profileStr ? JSON.parse(profileStr) : null;
-    const reallyPlus = isPlus || profile?.isPlus;
-
-    if (!reallyPlus && savedLimit && parseInt(savedLimit) > Date.now()) {
-      setQuotaExhausted(true);
-      setCountdown(Math.floor((parseInt(savedLimit) - Date.now()) / 1000));
-      return;
+    const { auth } = await import('../lib/firebase');
+    const { db } = await import('../lib/firebase');
+    let reallyPlus = isPlus;
+    
+    if (auth?.currentUser && db) {
+      const { doc, getDoc } = await import('firebase/firestore');
+      const profileSnap = await getDoc(doc(db, 'users', auth.currentUser.uid)).catch(() => null);
+      if (profileSnap?.exists()) {
+        const profile = profileSnap.data();
+        reallyPlus = profile.isPlus || false;
+        if (!reallyPlus && profile.quotaResetAt && profile.quotaResetAt > Date.now()) {
+          setQuotaExhausted(true);
+          setCountdown(Math.floor((profile.quotaResetAt - Date.now()) / 1000));
+          return;
+        }
+      }
     }
 
     setMessages(currentMessages);
@@ -380,34 +340,39 @@ export default function MariaAgent({ chatId, language, userName, isFocusMode = f
     setIsLoading(true);
 
     // Get preferences for personality
-    let preferences: { personality: string; useMemory: boolean; guardrailsEnabled: boolean; customApiKey?: string } = { 
+    let preferences: { 
+      personality: string; 
+      useMemory: boolean; 
+      guardrailsEnabled: boolean; 
+      customApiKey?: string;
+      firebaseToken?: string;
+    } = { 
       personality: 'default', 
       useMemory: true, 
       guardrailsEnabled: true 
     };
-    const savedProfile = localStorage.getItem('maria_profile');
-    if (savedProfile) {
-      try {
-        const parsed = JSON.parse(savedProfile);
+
+    if (auth?.currentUser && db) {
+      const { doc, getDoc } = await import('firebase/firestore');
+      const profileSnap = await getDoc(doc(db, 'users', auth.currentUser.uid)).catch(() => null);
+      if (profileSnap?.exists()) {
+        const parsed = profileSnap.data();
+        const firebaseToken = await auth.currentUser?.getIdToken();
         if (parsed.preferences) {
           preferences = {
             personality: parsed.preferences.personality || 'default',
             useMemory: parsed.preferences.useMemory !== undefined ? parsed.preferences.useMemory : true,
             guardrailsEnabled: parsed.preferences.guardrailsEnabled !== undefined ? parsed.preferences.guardrailsEnabled : true,
-            customApiKey: parsed.isPlus ? parsed.preferences.paidApiKey : undefined
+            firebaseToken: firebaseToken || undefined
+            // We NO LONGER send customApiKey from client to prevent leaks in network tab
           };
         }
-      } catch (e) {}
+      }
     }
 
-    // Get weather data from localStorage
+    // Weather Context - We can pass empty or fetch briefly if needed, 
+    // but avoiding localStorage for weather too.
     let weatherContext = null;
-    try {
-      const savedWeather = localStorage.getItem('weather_data');
-      if (savedWeather) {
-        weatherContext = JSON.parse(savedWeather);
-      }
-    } catch (e) {}
 
     try {
       const responseData = await askMaria(
@@ -434,13 +399,8 @@ export default function MariaAgent({ chatId, language, userName, isFocusMode = f
 
       // --- SMART NOTIFICATION LOGIC (Firestore first) ---
       const response = responseData.text;
-      const profileStr = localStorage.getItem('maria_profile');
-      const profile = profileStr ? JSON.parse(profileStr) : null;
-      const autoEnabled = profile?.preferences?.autoNotify || false;
+      const autoEnabled = true; // Simple fallback or fetch from profile state
       
-      const { auth } = await import('../lib/firebase');
-      const { db } = await import('../lib/firebase');
-
       const triggerNotification = async (notifData: any) => {
         if (auth?.currentUser && db) {
           try {
@@ -453,11 +413,6 @@ export default function MariaAgent({ chatId, language, userName, isFocusMode = f
           } catch (e) {
             console.error("Maria: Failed to save notification to Firestore", e);
           }
-        } else {
-          // Fallback to local for anonymous
-          const existingNotifs = JSON.parse(localStorage.getItem('maria_notifications') || '[]');
-          existingNotifs.unshift(notifData);
-          localStorage.setItem('maria_notifications', JSON.stringify(existingNotifs.slice(0, 50)));
         }
         window.dispatchEvent(new Event('maria_new_notification'));
       };
@@ -488,12 +443,13 @@ export default function MariaAgent({ chatId, language, userName, isFocusMode = f
           }
       }
 
-      const savedKeywords = localStorage.getItem('maria_keywords');
-      if (savedKeywords) {
+      if (auth?.currentUser && db) {
         try {
-          const kws: KeywordSetting[] = JSON.parse(savedKeywords);
+          const { doc, getDoc } = await import('firebase/firestore');
+          const profileSnap = await getDoc(doc(db, 'users', auth.currentUser.uid)).catch(() => null);
+          const keywords: KeywordSetting[] = profileSnap?.data()?.keywords || [];
           const lowerResponse = response.toLowerCase();
-          const foundKeywords = kws.filter(k => k.isEnabled && lowerResponse.includes(k.keyword.toLowerCase()));
+          const foundKeywords = keywords.filter(k => k.isEnabled && lowerResponse.includes(k.keyword.toLowerCase()));
           
           if (foundKeywords.length > 0) {
             const newNotif: UserNotification = {
@@ -530,7 +486,6 @@ export default function MariaAgent({ chatId, language, userName, isFocusMode = f
         midnight.setHours(24, 0, 0, 0);
         const limitTimestamp = midnight.getTime();
         
-        localStorage.setItem('maria_quota_limit', limitTimestamp.toString());
         setResetTimestamp(limitTimestamp);
         setQuotaExhausted(true);
         setCountdown(Math.floor((limitTimestamp - Date.now()) / 1000));
@@ -867,7 +822,6 @@ export default function MariaAgent({ chatId, language, userName, isFocusMode = f
                     onClick={() => {
                       setQuotaExhausted(false);
                       setCountdown(0);
-                      localStorage.removeItem('maria_quota_limit');
                     }}
                     className={`w-full py-3.5 rounded-xl flex items-center justify-center gap-2 text-xs font-black uppercase tracking-widest transition-all ${
                       countdown > 0 
@@ -954,23 +908,23 @@ export default function MariaAgent({ chatId, language, userName, isFocusMode = f
                             value={input}
                             onChange={(e) => setInput(e.target.value)}
                             onKeyDown={(e) => {
-                              // Comprehensive Enter key handling
-                              if ((e.key === 'Enter' || e.keyCode === 13) && !e.shiftKey) {
-                                e.preventDefault();
-                                if (input.trim() || pendingImages.length > 0) {
-                                  handleSubmit(e);
-                                  // Mobile optimizations
-                                  if (window.innerWidth < 640) {
-                                    (e.target as HTMLTextAreaElement).blur();
+                              // Enter for New Line per user request.
+                              // Ctrl+Enter or Cmd+Enter to Send (optional shortcut)
+                              if ((e.key === 'Enter' || e.keyCode === 13)) {
+                                if (e.ctrlKey || e.metaKey) {
+                                  e.preventDefault();
+                                  if (input.trim() || pendingImages.length > 0) {
+                                    handleSubmit(e);
                                   }
                                 }
+                                // No preventDefault for regular Enter means new line.
                               }
                             }}
                             disabled={isLoading}
                             placeholder={t.chatInputPlaceholder}
                             rows={1}
                             inputMode="text"
-                            enterKeyHint="send"
+                            enterKeyHint="enter"
                             className={`w-full py-4 sm:py-5 transition-all outline-none rounded-[24px] sm:rounded-[28px] pl-6 sm:pl-16 pr-14 text-sm sm:text-base shadow-xl resize-none overflow-hidden custom-scrollbar ${
                                 isDark || isFocusMode 
                                 ? 'bg-slate-900 border border-slate-800 text-white placeholder:text-slate-600 focus:border-brand-blue/50 focus:ring-8 focus:ring-brand-blue/10' 

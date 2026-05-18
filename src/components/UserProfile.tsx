@@ -132,118 +132,53 @@ export default function UserProfile({ isOpen, onClose, onLanguageChange, isLiteM
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    const loadSettings = () => {
+    const loadSettings = async () => {
       try {
-        const savedProfile = localStorage.getItem('maria_profile');
-        const savedKeywords = localStorage.getItem('maria_keywords');
-        const savedReminders = localStorage.getItem('maria_reminders');
-
-        if (savedKeywords && savedKeywords !== 'null' && savedKeywords !== 'undefined') {
-          const kws = JSON.parse(savedKeywords);
-          if (Array.isArray(kws)) setKeywords(kws);
-        }
-        
-        if (savedReminders && savedReminders !== 'null' && savedReminders !== 'undefined') {
-          const rems = JSON.parse(savedReminders);
-          if (Array.isArray(rems)) setReminders(rems);
-        }
-        
-        if (savedProfile && savedProfile !== 'null' && savedProfile !== 'undefined') {
-          const parsed = JSON.parse(savedProfile);
-          if (parsed && typeof parsed === 'object') {
-            setProfile(prev => ({
-              ...prev,
-              ...parsed,
-              preferences: {
-                ...prev.preferences,
-                ...(parsed.preferences || {})
-              }
-            }));
-          }
-        } else {
-          // Reset to default if no profile (logout)
-          setProfile({
-            name: 'Maria User',
-            email: 'premium@maria.ai',
-            joinedDate: new Date().toLocaleDateString('id-ID'),
-            isPlus: false,
-            preferences: {
-              theme: 'light',
-              language: 'id',
-              personality: 'ramah',
-              accentColor: 'blue',
-              safeMode: true,
-              autoSave: true,
-              useMemory: true,
-              performanceMode: false,
-              guardrailsEnabled: true,
-              style_tone: 'default',
-              warmth: 'default',
-              enthusiasm: 'default',
-              titles_lists: 'default',
-              emoji: 'default',
-              quick_answer: true,
-              nickname: '',
-              job: '',
-              bio: '',
-              use_history: true,
-              web_search: true,
-              canvas: true,
-              voice: true,
-              advanced_voice: true,
-              connector_search: true,
-              workStartTime: '08:00',
-              workEndTime: '17:00',
-              homeStartTime: '18:00',
-              autoNotify: true,
-              customInstructions: '',
-              paidApiKey: ''
-            },
-            notifications: {
-              codex: 'push',
-              group_chat: 'push',
-              usage: 'both',
-              project: 'email',
-              recommendation: 'push',
-              response: 'push',
-              tasks: 'both'
+        const { auth } = await import('../lib/firebase');
+        if (auth?.currentUser) {
+          const { doc, getDoc } = await import('firebase/firestore');
+          const { db } = await import('../lib/firebase');
+          if (db) {
+            const snap = await getDoc(doc(db, 'users', auth.currentUser.uid));
+            if (snap.exists()) {
+              const data = snap.data();
+              setProfile(prev => ({
+                ...prev,
+                ...data,
+                preferences: { ...(prev.preferences || {}), ...(data.preferences || {}) },
+                notifications: { ...(prev.notifications || {}), ...(data.notifications || {}) }
+              }));
+              if (data.keywords) setKeywords(data.keywords);
+              if (data.reminders) setReminders(data.reminders);
             }
-          });
+          }
         }
       } catch (e) {
-        console.error("Maria: Failed to load settings", e);
+        console.error("Maria: Failed to load settings from cloud", e);
       }
     };
 
     loadSettings();
     window.addEventListener('maria_refresh_system', loadSettings);
-    window.addEventListener('storage', loadSettings);
 
     const handleRepair = async () => {
       if (!user) return;
-      try {
-        localStorage.removeItem('maria_migration_v2_done');
-        window.dispatchEvent(new Event('maria_force_sync'));
-        alert('Proses perbaikan dimulai. Mohon tunggu beberapa saat agar data tersinkronisasi kembali.');
-      } catch (e) {
-        console.error(e);
-      }
+      alert('Proses perbaikan dimulai. Mohon tunggu beberapa saat agar data tersinkronisasi kembali.');
+      loadSettings();
     };
 
     window.addEventListener('maria_repair_sync', handleRepair);
 
     return () => {
       window.removeEventListener('maria_refresh_system', loadSettings);
-      window.removeEventListener('storage', loadSettings);
       window.removeEventListener('maria_repair_sync', handleRepair);
     };
   }, [user]);
 
   const saveProfile = async (nextProfile: UserProfileData) => {
     setProfile(nextProfile);
-    localStorage.setItem('maria_profile', JSON.stringify(nextProfile));
-    window.dispatchEvent(new Event('maria_refresh_system'));
-
+    // Explicitly NO localStorage per user request
+    
     if (user) {
       try {
         const { doc, updateDoc } = await import('firebase/firestore');
@@ -263,6 +198,7 @@ export default function UserProfile({ isOpen, onClose, onLanguageChange, isLiteM
         console.error("Maria: Firestore sync error", e);
       }
     }
+    window.dispatchEvent(new Event('maria_refresh_system'));
   };
 
   const handleUpdateNotification = (key: keyof UserProfileData['notifications'], value: any) => {
@@ -303,10 +239,21 @@ export default function UserProfile({ isOpen, onClose, onLanguageChange, isLiteM
     reader.readAsDataURL(file);
   };
 
-  const handleClearChat = () => {
+  const handleClearChat = async () => {
     if (window.confirm(t.confirmDeleteHistory)) {
-        localStorage.removeItem('maria_chat_history');
-        localStorage.removeItem('maria_chats');
+        if (user) {
+          try {
+            const { db } = await import('../lib/firebase');
+            const { collection, query, where, getDocs, writeBatch } = await import('firebase/firestore');
+            if (db) {
+               const q = query(collection(db, 'chats'), where('userId', '==', user.uid));
+               const snap = await getDocs(q);
+               const batch = writeBatch(db);
+               snap.forEach(d => batch.delete(d.ref));
+               await batch.commit();
+            }
+          } catch(e) {}
+        }
         window.dispatchEvent(new Event('maria_refresh_system'));
         onClose();
     }
@@ -1013,7 +960,6 @@ export default function UserProfile({ isOpen, onClose, onLanguageChange, isLiteM
                                   if (e.key === 'Enter' && newKeyword.trim()) {
                                     const updated = [...keywords, { id: generateId('key'), keyword: newKeyword.trim(), isEnabled: true }];
                                     setKeywords(updated);
-                                    localStorage.setItem('maria_keywords', JSON.stringify(updated));
                                     setNewKeyword('');
                                     if (user) {
                                       import('firebase/firestore').then(async ({ doc, updateDoc }) => {
@@ -1033,7 +979,6 @@ export default function UserProfile({ isOpen, onClose, onLanguageChange, isLiteM
                                   if (newKeyword.trim()) {
                                     const updated = [...keywords, { id: generateId('key'), keyword: newKeyword.trim(), isEnabled: true }];
                                     setKeywords(updated);
-                                    localStorage.setItem('maria_keywords', JSON.stringify(updated));
                                     setNewKeyword('');
                                     if (user) {
                                       import('firebase/firestore').then(async ({ doc, updateDoc }) => {
@@ -1064,7 +1009,6 @@ export default function UserProfile({ isOpen, onClose, onLanguageChange, isLiteM
                                     onClick={() => {
                                       const updated = keywords.filter(k => k.id !== kw.id);
                                       setKeywords(updated);
-                                      localStorage.setItem('maria_keywords', JSON.stringify(updated));
                                       if (user) {
                                         import('firebase/firestore').then(async ({ doc, updateDoc }) => {
                                           const { db } = await import('../lib/firebase');
@@ -1086,7 +1030,6 @@ export default function UserProfile({ isOpen, onClose, onLanguageChange, isLiteM
                               onClick={() => {
                                 if (confirm('Apakah Anda yakin ingin menghapus semua memory Maria?')) {
                                   setKeywords([]);
-                                  localStorage.setItem('maria_keywords', JSON.stringify([]));
                                   if (user) {
                                     import('firebase/firestore').then(async ({ doc, updateDoc }) => {
                                       const { db } = await import('../lib/firebase');
@@ -1235,7 +1178,6 @@ export default function UserProfile({ isOpen, onClose, onLanguageChange, isLiteM
                                   isCompleted: false 
                                 }];
                                 setReminders(updated);
-                                localStorage.setItem('maria_reminders', JSON.stringify(updated));
                                 setNewReminderTitle('');
                                 setNewReminderDateTime('');
                                 window.dispatchEvent(new Event('maria_refresh_system'));
@@ -1283,7 +1225,6 @@ export default function UserProfile({ isOpen, onClose, onLanguageChange, isLiteM
                                   onClick={() => {
                                     const updated = reminders.filter(r => r.id !== rem.id);
                                     setReminders(updated);
-                                    localStorage.setItem('maria_reminders', JSON.stringify(updated));
                                     window.dispatchEvent(new Event('maria_refresh_system'));
                                     
                                     // Sync to Firebase profile
