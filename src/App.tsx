@@ -168,6 +168,10 @@ function MainApp() {
             }
           }
         }
+      } else {
+        setUserName('Pengguna');
+        setUserAvatar(null);
+        setIsPlus(false);
       }
     } catch (e) {
       console.error("Maria: Failed to load profile", e);
@@ -436,19 +440,28 @@ function MainApp() {
     const { doc, setDoc } = await import('firebase/firestore');
     const { db } = await import('./lib/firebase');
     if (db) {
-      await setDoc(doc(db, 'chats', newId), {
-        userId: auth.currentUser.uid,
-        title: chatTitle,
-        updatedAt: Date.now(),
-        isPinned: false,
-        isFavorite: false
-      });
+      try {
+        await setDoc(doc(db, 'chats', newId), {
+          id: newId,
+          userId: auth.currentUser.uid,
+          title: chatTitle,
+          updatedAt: Date.now(),
+          isPinned: false,
+          isFavorite: false
+        });
+        
+        // Wait a tiny bit for Firestore to propagate
+        await new Promise(resolve => setTimeout(resolve, 100));
+        
+        setActiveChatId(newId);
+        loadChats(newId); // Force load this specific one
+      } catch (e) {
+        console.error("Maria: Failed to create chat doc", e);
+        setActiveChatId(newId);
+      }
+    } else {
+      setActiveChatId(newId);
     }
-
-    // THEN activate the chat ID for the UI
-    setActiveChatId(newId);
-    
-    refreshAll();
     
     if (window.innerWidth < 1024) {
       setIsSidebarOpen(false);
@@ -853,6 +866,7 @@ function MainApp() {
               chatId={activeChatId}
               language={language} 
               userName={userName}
+              user={user}
               isFocusMode={isFocusMode} 
               isLiteMode={isLiteMode}
               isDark={isDark}

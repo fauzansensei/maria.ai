@@ -39,6 +39,7 @@ interface MariaAgentProps {
   chatId: string;
   language: string;
   userName?: string;
+  user?: any;
   isFocusMode?: boolean;
   isLiteMode?: boolean;
   isDark?: boolean;
@@ -46,7 +47,7 @@ interface MariaAgentProps {
   onTitleUpdate?: (title: string) => void;
 }
 
-export default function MariaAgent({ chatId, language, userName, isFocusMode = false, isLiteMode = false, isDark = false, onExitFocus, onTitleUpdate }: MariaAgentProps) {
+export default function MariaAgent({ chatId, language, userName, user, isFocusMode = false, isLiteMode = false, isDark = false, onExitFocus, onTitleUpdate }: MariaAgentProps) {
   const t = getTranslation(language);
   const transition = isLiteMode ? { duration: 0.1 } : { duration: 0.5 };
   const [messages, setMessages] = useState<Message[]>([]);
@@ -103,12 +104,16 @@ export default function MariaAgent({ chatId, language, userName, isFocusMode = f
     return () => {
       window.removeEventListener('maria_refresh_system', loadProfile);
     };
-  }, []);
+  }, [user?.uid]);
 
   useEffect(() => {
     let unsubscribeMessages = () => {};
 
     const loadChat = async () => {
+      if (!chatId) {
+        setIsInitializing(false);
+        return;
+      }
       try {
         // Try Firestore first if logged in
         const { auth } = await import('../lib/firebase');
@@ -150,6 +155,12 @@ export default function MariaAgent({ chatId, language, userName, isFocusMode = f
               console.error("Messages snapshot error:", err);
               if (err.code === 'permission-denied') {
                 console.warn("Maria: Permission denied for messages.");
+                setMessages([{ 
+                  id: 'error-perm', 
+                  role: 'assistant', 
+                  content: "Maaf, Maria tidak bisa mengakses riwayat pesan ini karena masalah izin access. Silakan coba buat chat baru.", 
+                  timestamp: Date.now() 
+                }]);
               }
               setIsInitializing(false);
             });
@@ -182,7 +193,7 @@ export default function MariaAgent({ chatId, language, userName, isFocusMode = f
       window.removeEventListener('maria_history_update' as any, handleHistoryUpdate);
       if (typeof unsubscribeMessages === 'function') unsubscribeMessages();
     };
-  }, [chatId, t.welcome]);
+  }, [chatId, user?.uid, t.welcome]);
 
   const scrollToBottom = () => {
     if (isLiteMode) {

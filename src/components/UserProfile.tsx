@@ -152,6 +152,57 @@ export default function UserProfile({ isOpen, onClose, onLanguageChange, isLiteM
               if (data.reminders) setReminders(data.reminders);
             }
           }
+        } else {
+          // Reset profile when logged out
+          setProfile({
+            name: 'Maria User',
+            email: 'premium@maria.ai',
+            joinedDate: new Date().toLocaleDateString('id-ID'),
+            isPlus: false,
+            preferences: {
+              theme: 'light',
+              language: 'id',
+              personality: 'ramah',
+              accentColor: 'blue',
+              safeMode: true,
+              autoSave: true,
+              useMemory: true,
+              performanceMode: false,
+              guardrailsEnabled: true,
+              style_tone: 'default',
+              warmth: 'default',
+              enthusiasm: 'default',
+              titles_lists: 'default',
+              emoji: 'default',
+              quick_answer: true,
+              nickname: '',
+              job: '',
+              bio: '',
+              use_history: true,
+              web_search: true,
+              canvas: true,
+              voice: true,
+              advanced_voice: true,
+              connector_search: true,
+              workStartTime: '08:00',
+              workEndTime: '17:00',
+              homeStartTime: '18:00',
+              autoNotify: true,
+              customInstructions: '',
+              paidApiKey: ''
+            },
+            notifications: {
+              codex: 'push',
+              group_chat: 'push',
+              usage: 'both',
+              project: 'email',
+              recommendation: 'push',
+              response: 'push',
+              tasks: 'both'
+            }
+          });
+          setKeywords([]);
+          setReminders([]);
         }
       } catch (e) {
         console.error("Maria: Failed to load settings from cloud", e);
