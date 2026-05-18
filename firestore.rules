@@ -16,11 +16,9 @@ service cloud.firestore {
     }
 
     function isChatOwner(chatId) {
-      // Use get() once to check ownership. exists() is often redundant if you use get().
-      // If the chat doesn't exist yet (during create), this might fail, so we handle that.
       return isSignedIn() && (
         chatId == 'initial-chat' ||
-        get(/databases/$(database)/documents/chats/$(chatId)).data.userId == request.auth.uid
+        (exists(/databases/$(database)/documents/chats/$(chatId)) && get(/databases/$(database)/documents/chats/$(chatId)).data.userId == request.auth.uid)
       );
     }
 
@@ -34,17 +32,19 @@ service cloud.firestore {
     }
 
     match /chats/{chatId} {
-      // For get/update/delete, we use 'resource' which is the existing document.
-      // This is efficient as it doesn't count as an extra read in the same way get() does in some contexts.
-      allow get: if isSignedIn() && (chatId == 'initial-chat' || resource.data.userId == request.auth.uid);
+      allow get: if isSignedIn() && (chatId == 'initial-chat' || resource == null || resource.data.userId == request.auth.uid);
       allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
       allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
-      allow update, delete: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow update: if isSignedIn() && (
+        resource.data.userId == request.auth.uid || 
+        (chatId == 'initial-chat' && (!('userId' in resource.data) || resource.data.userId == null))
+      );
+      allow delete: if isSignedIn() && resource.data.userId == request.auth.uid;
 
       match /messages/{messageId} {
         allow read: if isChatOwner(chatId);
         allow create: if isChatOwner(chatId);
-        allow update, delete: if false;
+        allow update, delete: if isChatOwner(chatId);
       }
     }
 

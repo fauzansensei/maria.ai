@@ -532,19 +532,40 @@ export default function MariaAgent({ chatId, language, userName, isFocusMode = f
     if (msgIndex === -1) return;
 
     const updatedMessages = [...messages];
+    const originalMsg = updatedMessages[msgIndex];
+    
     updatedMessages[msgIndex] = {
-      ...updatedMessages[msgIndex],
+      ...originalMsg,
       content: editInput,
       timestamp: Date.now()
     };
 
-    if (updatedMessages[msgIndex].role === 'user') {
+    // 1. If it's a user message, we might want to trigger a new AI response (Regeneration pattern)
+    if (originalMsg.role === 'user') {
       const finalMessages = updatedMessages.slice(0, msgIndex + 1);
       setEditingId(null);
       processMessage(finalMessages, editInput);
     } else {
+      // 2. Just update the message in Firestore
+      try {
+        const { auth } = await import('../lib/firebase');
+        if (auth?.currentUser) {
+          const { doc, updateDoc } = await import('firebase/firestore');
+          const { db, handleFirestoreError, OperationType, sanitizeForFirestore } = await import('../lib/firebase');
+          if (db) {
+            const msgRef = doc(db, 'chats', chatId, 'messages', msgId);
+            const sanitized = sanitizeForFirestore(updatedMessages[msgIndex]);
+            await updateDoc(msgRef, sanitized).catch(err => {
+              console.error("Firebase update error:", err);
+              handleFirestoreError(err, OperationType.UPDATE, `chats/${chatId}/messages/${msgId}`);
+            });
+          }
+        }
+      } catch (e) {
+        console.error("Failed to update cloud storage", e);
+      }
+      
       setMessages(updatedMessages);
-      saveToStorage(updatedMessages);
       setEditingId(null);
     }
   };
@@ -687,10 +708,35 @@ export default function MariaAgent({ chatId, language, userName, isFocusMode = f
     return loc;
   };
 
-  const handleDeleteMessage = (id: string) => {
+  const handleDeleteMessage = async (id: string) => {
+    // 1. Update local state immediately for responsiveness
     const updatedMessages = messages.filter(m => m.id !== id);
     setMessages(updatedMessages);
-    saveToStorage(updatedMessages);
+
+    // 2. Perform actual deletion from Firestore if logged in
+    try {
+      const { auth } = await import('../lib/firebase');
+      if (auth?.currentUser) {
+        const { doc, deleteDoc } = await import('firebase/firestore');
+        const { db, handleFirestoreError, OperationType } = await import('../lib/firebase');
+        if (db) {
+          const msgRef = doc(db, 'chats', chatId, 'messages', id);
+          await deleteDoc(msgRef).catch(err => {
+            console.error("Firebase deletion error:", err);
+            handleFirestoreError(err, OperationType.DELETE, `chats/${chatId}/messages/${id}`);
+          });
+          
+          // Also update the chat metadata updatedAt
+          const { updateDoc } = await import('firebase/firestore');
+          const chatRef = doc(db, 'chats', chatId);
+          await updateDoc(chatRef, { updatedAt: Date.now() }).catch(() => {});
+        }
+      }
+      
+      window.dispatchEvent(new CustomEvent('maria_history_update', { detail: { chatId } }));
+    } catch (e) {
+      console.error("Failed to delete from cloud storage", e);
+    }
   };
 
   return (
@@ -908,16 +954,17 @@ export default function MariaAgent({ chatId, language, userName, isFocusMode = f
                             value={input}
                             onChange={(e) => setInput(e.target.value)}
                             onKeyDown={(e) => {
-                              // Enter for New Line per user request.
-                              // Ctrl+Enter or Cmd+Enter to Send (optional shortcut)
-                              if ((e.key === 'Enter' || e.keyCode === 13)) {
+                              // Standard Enter key will now always create a new line as per user request
+                              // Users can use Ctrl+Enter or Cmd+Enter to send the message 
+                              // or just use the UI Send button.
+                              if (e.key === 'Enter') {
                                 if (e.ctrlKey || e.metaKey) {
                                   e.preventDefault();
                                   if (input.trim() || pendingImages.length > 0) {
                                     handleSubmit(e);
                                   }
                                 }
-                                // No preventDefault for regular Enter means new line.
+                                // No preventDefault here for normal Enter: browser handles newline
                               }
                             }}
                             disabled={isLoading}

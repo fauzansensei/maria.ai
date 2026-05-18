@@ -54,9 +54,10 @@ async function startServer() {
           const userDoc = await admin.firestore().collection('users').doc(decodedToken.uid).get();
           if (userDoc.exists) {
             const data = userDoc.data();
-            // Only use custom key if user isPlus has it
-            if (data?.isPlus && data?.preferences?.paidApiKey) {
+            // Use paid API key if available in preferences (regardless of Plus status, if they have a key we use it)
+            if (data?.preferences?.paidApiKey) {
               effectiveApiKey = data.preferences.paidApiKey;
+              console.log(`Maria Server: Using user-provided API key for UID: ${decodedToken.uid}`);
             }
           }
         } catch (e) {
@@ -79,8 +80,8 @@ async function startServer() {
           systemInstruction,
           temperature: temperature || 0.7,
           topP: topP || 0.9,
-          // googleSearch tool naming might vary between SDK versions
-          tools: [{ google_search: {} }] as any,
+          // Gemini 2.0 SDK uses googleSearch (camelCase)
+          tools: [{ googleSearch: {} }] as any,
         }
       });
 
