@@ -291,7 +291,7 @@ function MainApp() {
             setUserAvatar(null);
             setIsPlus(false);
             setChatSessions([]);
-            setActiveChatId('');
+            setActiveChatId('initial-chat');
             setIsMigrationFinished(true);
             
             // Re-load chats as anonymous
@@ -358,7 +358,11 @@ function MainApp() {
                   };
                   await setDoc(userRef, defaultProfile).catch(console.error);
                 }
-              }, (err) => console.error("Profile snapshot error:", err));
+              }, (err) => {
+                if (err.code !== 'permission-denied') {
+                  console.error("Profile snapshot error:", err);
+                }
+              });
 
               // 3. Real-time Chats Metadata Listener
               const { collection, query, where } = await import('firebase/firestore');
@@ -377,7 +381,11 @@ function MainApp() {
                 if (!activeChatIdRef.current && firebaseSessions.length > 0) {
                   setActiveChatId(firebaseSessions[0].id);
                 }
-              }, (err) => console.error("Chats snapshot error:", err));
+              }, (err) => {
+                if (err.code !== 'permission-denied') {
+                  console.error("Chats snapshot error:", err);
+                }
+              });
             }
           } catch (e) {
             console.error("Maria: Failed to initialize Firebase listeners", e);

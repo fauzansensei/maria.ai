@@ -27,6 +27,10 @@ export default function SavedItems({ isOpen, onClose }: SavedItemsProps) {
             if (snap.exists()) {
               setSavedItems(snap.data().savedInfo || []);
             }
+          }, (err) => {
+            if (err.code !== 'permission-denied') {
+              console.error("Saved items snapshot error:", err);
+            }
           });
         }
       }

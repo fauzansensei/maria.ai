@@ -56,6 +56,10 @@ export default function NotificationCenter({ isDark, isOpen, onClose }: Notifica
             const notifs: UserNotification[] = [];
             snap.forEach(doc => notifs.push({ id: doc.id, ...doc.data() } as any));
             setNotifications(notifs);
+          }, (err) => {
+            if (err.code !== 'permission-denied') {
+              console.error("Notifications snapshot error:", err);
+            }
           });
           unsubs.push(unsubNotifs);
 
@@ -67,6 +71,10 @@ export default function NotificationCenter({ isDark, isOpen, onClose }: Notifica
               const data = snap.data();
               if (data.reminders) setReminders(data.reminders);
               if (data.keywords) setKeywords(data.keywords);
+            }
+          }, (err) => {
+            if (err.code !== 'permission-denied') {
+              console.error("User profile snapshot error:", err);
             }
           });
           unsubs.push(unsubUser);

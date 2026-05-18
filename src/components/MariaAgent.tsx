@@ -152,15 +152,21 @@ export default function MariaAgent({ chatId, language, userName, user, isFocusMo
               }
               setIsInitializing(false);
             }, (err: any) => {
-              console.error("Messages snapshot error:", err);
               if (err.code === 'permission-denied') {
-                console.warn("Maria: Permission denied for messages.");
-                setMessages([{ 
-                  id: 'error-perm', 
-                  role: 'assistant', 
-                  content: "Maaf, Maria tidak bisa mengakses riwayat pesan ini karena masalah izin access. Silakan coba buat chat baru.", 
-                  timestamp: Date.now() 
-                }]);
+                // Silently ignore if we are logging out
+                import('../lib/firebase').then(({ auth }) => {
+                  if (auth?.currentUser) {
+                    console.error("Messages snapshot error:", err);
+                    setMessages([{ 
+                      id: 'error-perm', 
+                      role: 'assistant', 
+                      content: "Maaf, Maria tidak bisa mengakses riwayat pesan ini karena masalah izin access. Silakan coba buat chat baru.", 
+                      timestamp: Date.now() 
+                    }]);
+                  }
+                });
+              } else {
+                console.error("Messages snapshot error:", err);
               }
               setIsInitializing(false);
             });
