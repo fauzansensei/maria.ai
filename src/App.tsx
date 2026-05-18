@@ -430,10 +430,9 @@ function MainApp() {
     if (!auth?.currentUser) return;
 
     const newId = generateId('chat');
-    setActiveChatId(newId);
     const chatTitle = 'Chat Baru';
     
-    // Sync to Firebase immediately
+    // Sync to Firebase FIRST to avoid race condition in messages listener
     const { doc, setDoc } = await import('firebase/firestore');
     const { db } = await import('./lib/firebase');
     if (db) {
@@ -445,6 +444,9 @@ function MainApp() {
         isFavorite: false
       });
     }
+
+    // THEN activate the chat ID for the UI
+    setActiveChatId(newId);
     
     refreshAll();
     

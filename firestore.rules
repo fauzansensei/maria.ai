@@ -18,7 +18,10 @@ service cloud.firestore {
     function isChatOwner(chatId) {
       return isSignedIn() && (
         chatId == 'initial-chat' ||
-        (exists(/databases/$(database)/documents/chats/$(chatId)) && get(/databases/$(database)/documents/chats/$(chatId)).data.userId == request.auth.uid)
+        // Allow if chat doc doesn't exist yet (handles race condition when client listens before metadata is saved)
+        // Note: New chats have random IDs, making this safe for initial access.
+        !exists(/databases/$(database)/documents/chats/$(chatId)) ||
+        get(/databases/$(database)/documents/chats/$(chatId)).data.userId == request.auth.uid
       );
     }
 

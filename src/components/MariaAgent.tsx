@@ -709,15 +709,14 @@ export default function MariaAgent({ chatId, language, userName, isFocusMode = f
   };
 
   const handleDeleteMessage = async (id: string) => {
-    // 1. Update local state immediately for responsiveness
-    const updatedMessages = messages.filter(m => m.id !== id);
-    setMessages(updatedMessages);
+    // 1. Optimistic local update
+    setMessages(current => current.filter(m => m.id !== id));
 
-    // 2. Perform actual deletion from Firestore if logged in
+    // 2. Persistent cloud deletion
     try {
       const { auth } = await import('../lib/firebase');
       if (auth?.currentUser) {
-        const { doc, deleteDoc } = await import('firebase/firestore');
+        const { doc, deleteDoc, updateDoc } = await import('firebase/firestore');
         const { db, handleFirestoreError, OperationType } = await import('../lib/firebase');
         if (db) {
           const msgRef = doc(db, 'chats', chatId, 'messages', id);
@@ -726,16 +725,16 @@ export default function MariaAgent({ chatId, language, userName, isFocusMode = f
             handleFirestoreError(err, OperationType.DELETE, `chats/${chatId}/messages/${id}`);
           });
           
-          // Also update the chat metadata updatedAt
-          const { updateDoc } = await import('firebase/firestore');
+          // Update chat metadata timestamp
           const chatRef = doc(db, 'chats', chatId);
           await updateDoc(chatRef, { updatedAt: Date.now() }).catch(() => {});
         }
       }
       
+      // Notify other components (like Sidebar) to refresh if needed
       window.dispatchEvent(new CustomEvent('maria_history_update', { detail: { chatId } }));
     } catch (e) {
-      console.error("Failed to delete from cloud storage", e);
+      console.error("Failed to delete message", e);
     }
   };
 
