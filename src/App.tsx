@@ -15,6 +15,7 @@ const NotificationCenter = React.lazy(() => import('./components/NotificationCen
 const SavedItems = React.lazy(() => import('./components/SavedItems'));
 const MultiUtilityWidget = React.lazy(() => import('./components/MultiUtilityWidget'));
 const DeviceStatusWidget = React.lazy(() => import('./components/DeviceStatusWidget'));
+const Onboarding = React.lazy(() => import('./components/Onboarding'));
 import { 
   Search, Info, Settings, User as UserIcon, Star,
   Menu, X, Clock, Globe, Plus, MoreVertical, ChevronRight, Sparkles,
@@ -131,6 +132,7 @@ function MainApp() {
   const [chatSessions, setChatSessions] = useState<ChatSession[]>([]);
   const [activeChatId, setActiveChatId] = useState<string>('');
   const [isMigrationFinished, setIsMigrationFinished] = useState(false);
+  const [showOnboarding, setShowOnboarding] = useState(false);
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renamingTitle, setRenamingTitle] = useState('');
@@ -326,6 +328,12 @@ function MainApp() {
                     setLanguage(profile.preferences.language);
                   }
                   
+                  if (profile.onboardingCompleted === false) {
+                    setShowOnboarding(true);
+                  } else {
+                    setShowOnboarding(false);
+                  }
+
                   window.dispatchEvent(new Event('maria_refresh_system'));
                 } else {
                   // Initialize profile
@@ -336,6 +344,7 @@ function MainApp() {
                     joinedDate: new Date().toLocaleDateString('id-ID'),
                     isPlus: false,
                     quotaResetAt: 0,
+                    onboardingCompleted: false,
                     preferences: { 
                       theme: 'light', 
                       language: 'id', 
@@ -907,6 +916,18 @@ function MainApp() {
           isOpen={isSavedItemsOpen}
           onClose={() => setIsSavedItemsOpen(false)}
         />
+
+        {showOnboarding && user && (
+          <Onboarding 
+            user={user} 
+            isDark={isDark} 
+            onComplete={(name) => {
+              setUserName(name);
+              setShowOnboarding(false);
+              loadChats();
+            }} 
+          />
+        )}
       </React.Suspense>
     </div>
   );

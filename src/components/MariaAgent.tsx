@@ -65,6 +65,7 @@ export default function MariaAgent({ chatId, language, userName, user, isFocusMo
     isOpen: false
   });
   const [quotaExhausted, setQuotaExhausted] = useState(false);
+  const [showQuotaModal, setShowQuotaModal] = useState(false);
   const [countdown, setCountdown] = useState(0);
   const [resetTimestamp, setResetTimestamp] = useState<number | null>(null);
   const [isPlus, setIsPlus] = useState(false);
@@ -93,8 +94,6 @@ export default function MariaAgent({ chatId, language, userName, user, isFocusMo
           }
         }
       } else {
-        // Limited fallback for anonymous if needed, but user said "hapus aja"
-        // I will just use state and avoid localStorage
         setIsPlus(false);
         setQuotaExhausted(false);
       }
@@ -266,6 +265,10 @@ export default function MariaAgent({ chatId, language, userName, user, isFocusMo
 
   const handleSubmit = async (e: any) => {
     e.preventDefault();
+    if (quotaExhausted && !isPlus) {
+      setShowQuotaModal(true);
+      return;
+    }
     if ((!input.trim() && pendingImages.length === 0) || isLoading) return;
 
     // Capture current values
@@ -505,6 +508,7 @@ export default function MariaAgent({ chatId, language, userName, user, isFocusMo
         
         setResetTimestamp(limitTimestamp);
         setQuotaExhausted(true);
+        setShowQuotaModal(true);
         setCountdown(Math.floor((limitTimestamp - Date.now()) / 1000));
 
         // Sync quota limit to Firebase Profile
@@ -838,7 +842,7 @@ export default function MariaAgent({ chatId, language, userName, user, isFocusMo
 
       {/* Quota Exhausted Alert - Grok Style */}
       <AnimatePresence>
-        {quotaExhausted && (
+        {showQuotaModal && (
           <motion.div 
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
@@ -871,7 +875,7 @@ export default function MariaAgent({ chatId, language, userName, user, isFocusMo
                     <button 
                       onClick={() => {
                         // Logic for upgrade
-                        setQuotaExhausted(false);
+                        setShowQuotaModal(false);
                       }}
                       className="w-full py-3.5 rounded-xl bg-brand-blue text-white text-xs font-black uppercase tracking-widest shadow-lg shadow-brand-blue/20 hover:scale-[1.02] active:scale-95 transition-all"
                     >
@@ -882,7 +886,7 @@ export default function MariaAgent({ chatId, language, userName, user, isFocusMo
                   <button 
                     disabled={countdown > 0}
                     onClick={() => {
-                      setQuotaExhausted(false);
+                      setShowQuotaModal(false);
                       setCountdown(0);
                     }}
                     className={`w-full py-3.5 rounded-xl flex items-center justify-center gap-2 text-xs font-black uppercase tracking-widest transition-all ${
@@ -893,7 +897,7 @@ export default function MariaAgent({ chatId, language, userName, user, isFocusMo
                   >
                     {countdown > 0 ? (
                       <>
-                        <Timer size={14} />
+                        <RefreshCw size={14} className="animate-spin" />
                         {t.wait} ({formatCountdown(countdown)})
                       </>
                     ) : (
@@ -905,7 +909,7 @@ export default function MariaAgent({ chatId, language, userName, user, isFocusMo
                   </button>
 
                   <button 
-                    onClick={() => setQuotaExhausted(false)}
+                    onClick={() => setShowQuotaModal(false)}
                     className={`mt-2 py-2 text-[10px] font-black uppercase tracking-widest transition-all ${
                       isDark || isFocusMode ? 'text-slate-600 hover:text-slate-400' : 'text-slate-400 hover:text-slate-500'
                     }`}
@@ -968,6 +972,9 @@ export default function MariaAgent({ chatId, language, userName, user, isFocusMo
                         <textarea
                             ref={textareaRef}
                             value={input}
+                            onClick={() => {
+                              if (quotaExhausted && !isPlus) setShowQuotaModal(true);
+                            }}
                             onChange={(e) => setInput(e.target.value)}
                             onKeyDown={(e) => {
                               // Standard Enter key will now always create a new line as per user request
