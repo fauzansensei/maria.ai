@@ -17,8 +17,14 @@ export default function NotificationCenter({ isDark, isOpen, onClose }: Notifica
   const [reminders, setReminders] = useState<ReminderSetting[]>([]);
   const [keywords, setKeywords] = useState<KeywordSetting[]>([]);
 
-  const loadData = useCallback(() => {
+  const loadData = useCallback(async () => {
     try {
+      const { auth } = await import('../lib/firebase');
+      if (auth?.currentUser) {
+        // We handle real-time sync via useEffect elsewhere to avoid duplication
+        return;
+      }
+
       const savedNotifications = localStorage.getItem('maria_notifications');
       const savedReminders = localStorage.getItem('maria_reminders');
       const savedKeywords = localStorage.getItem('maria_keywords');
@@ -46,22 +52,82 @@ export default function NotificationCenter({ isDark, isOpen, onClose }: Notifica
     loadData();
     window.addEventListener('storage', loadData);
     window.addEventListener('maria_new_notification', loadData);
+    
+    // Auth-based Listener
+    let unsubs: (() => void)[] = [];
+    
+    const setupFirebaseListeners = async () => {
+      const { auth } = await import('../lib/firebase');
+      if (auth?.currentUser) {
+        const { collection, query, where, onSnapshot, orderBy } = await import('firebase/firestore');
+        const { db } = await import('../lib/firebase');
+        if (db) {
+          // Notifications
+          const qNotifs = query(
+            collection(db, 'notifications'), 
+            where('userId', '==', auth.currentUser.uid),
+            orderBy('timestamp', 'desc')
+          );
+          const unsubNotifs = onSnapshot(qNotifs, (snap) => {
+            const notifs: UserNotification[] = [];
+            snap.forEach(doc => notifs.push({ id: doc.id, ...doc.data() } as any));
+            setNotifications(notifs);
+          });
+          unsubs.push(unsubNotifs);
+
+          // keywords/reminders stored in user profile - already handled in App.tsx
+          // but we can listen directly if needed for UI responsiveness
+          const { doc } = await import('firebase/firestore');
+          const unsubUser = onSnapshot(doc(db, 'users', auth.currentUser.uid), (snap) => {
+            if (snap.exists()) {
+              const data = snap.data();
+              if (data.reminders) setReminders(data.reminders);
+              if (data.keywords) setKeywords(data.keywords);
+            }
+          });
+          unsubs.push(unsubUser);
+        }
+      }
+    };
+
+    setupFirebaseListeners();
+
     return () => {
       window.removeEventListener('storage', loadData);
       window.removeEventListener('maria_new_notification', loadData);
+      unsubs.forEach(fn => fn());
     };
   }, [loadData]);
 
-  // Reminder check logic
+  // Reminder check logic (Modified for Firestore)
   useEffect(() => {
-    const interval = setInterval(() => {
+    const interval = setInterval(async () => {
+      const { auth } = await import('../lib/firebase');
       const now = new Date();
-      const currentReminders = JSON.parse(localStorage.getItem('maria_reminders') || '[]');
+      
+      // We only run client-side checker for non-logged in users 
+      // or to trigger notifications for logged in users locally
+      const currentReminders = reminders; 
       let hasChange = false;
 
-      const updatedReminders = currentReminders.map((rem: ReminderSetting) => {
+      const triggerNotification = async (notifData: any) => {
+        const { db } = await import('../lib/firebase');
+        if (auth?.currentUser && db) {
+          const { doc, setDoc } = await import('firebase/firestore');
+          await setDoc(doc(db, 'notifications', notifData.id), {
+            ...notifData,
+            userId: auth.currentUser.uid
+          });
+        } else {
+          const existingNotifs = JSON.parse(localStorage.getItem('maria_notifications') || '[]');
+          existingNotifs.unshift(notifData);
+          localStorage.setItem('maria_notifications', JSON.stringify(existingNotifs.slice(0, 50)));
+        }
+        window.dispatchEvent(new Event('maria_new_notification'));
+      };
+
+      const updatedReminders = await Promise.all(currentReminders.map(async (rem: ReminderSetting) => {
         if (!rem.isCompleted && new Date(rem.dateTime) <= now) {
-          // Trigger notification
           const newNotif: UserNotification = {
             id: 'reminder-' + Date.now() + '-' + rem.id,
             type: 'reminder',
@@ -71,47 +137,83 @@ export default function NotificationCenter({ isDark, isOpen, onClose }: Notifica
             isRead: false
           };
 
-          const existingNotifs = JSON.parse(localStorage.getItem('maria_notifications') || '[]');
-          // Avoid duplicate triggers for the same reminder in a short time
-          const alreadyNotified = existingNotifs.some((n: UserNotification) => n.content.includes(rem.title) && Date.now() - n.timestamp < 60000);
+          // Avoid duplicate triggers
+          const alreadyNotified = notifications.some((n: UserNotification) => n.content.includes(rem.title) && Date.now() - n.timestamp < 60000);
           
           if (!alreadyNotified) {
-            existingNotifs.unshift(newNotif);
-            localStorage.setItem('maria_notifications', JSON.stringify(existingNotifs.slice(0, 50)));
-            window.dispatchEvent(new Event('maria_new_notification'));
+            await triggerNotification(newNotif);
             hasChange = true;
           }
           
           return { ...rem, isCompleted: true };
         }
         return rem;
-      });
+      }));
 
       if (hasChange) {
-        localStorage.setItem('maria_reminders', JSON.stringify(updatedReminders));
+        if (auth?.currentUser) {
+          const { db } = await import('../lib/firebase');
+          const { doc, updateDoc } = await import('firebase/firestore');
+          if (db) {
+            await updateDoc(doc(db, 'users', auth.currentUser.uid), { reminders: updatedReminders });
+          }
+        } else {
+          localStorage.setItem('maria_reminders', JSON.stringify(updatedReminders));
+        }
         setReminders(updatedReminders);
       }
-    }, 10000); // Check every 10 seconds
+    }, 15000); 
 
     return () => clearInterval(interval);
-  }, []);
+  }, [reminders, notifications]);
 
-  const markAsRead = (id: string) => {
-    const updated = notifications.map(n => n.id === id ? { ...n, isRead: true } : n);
-    setNotifications(updated);
-    localStorage.setItem('maria_notifications', JSON.stringify(updated));
+  const markAsRead = async (id: string) => {
+    const { auth } = await import('../lib/firebase');
+    if (auth?.currentUser) {
+      const { db } = await import('../lib/firebase');
+      const { doc, updateDoc } = await import('firebase/firestore');
+      if (db) {
+        await updateDoc(doc(db, 'notifications', id), { isRead: true });
+      }
+    } else {
+      const updated = notifications.map(n => n.id === id ? { ...n, isRead: true } : n);
+      setNotifications(updated);
+      localStorage.setItem('maria_notifications', JSON.stringify(updated));
+    }
   };
 
-  const deleteNotification = (e: React.MouseEvent, id: string) => {
+  const deleteNotification = async (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
-    const updated = notifications.filter(n => n.id !== id);
-    setNotifications(updated);
-    localStorage.setItem('maria_notifications', JSON.stringify(updated));
+    const { auth } = await import('../lib/firebase');
+    if (auth?.currentUser) {
+      const { db } = await import('../lib/firebase');
+      const { doc, deleteDoc } = await import('firebase/firestore');
+      if (db) {
+        await deleteDoc(doc(db, 'notifications', id));
+      }
+    } else {
+      const updated = notifications.filter(n => n.id !== id);
+      setNotifications(updated);
+      localStorage.setItem('maria_notifications', JSON.stringify(updated));
+    }
   };
 
-  const clearAll = () => {
-    setNotifications([]);
-    localStorage.setItem('maria_notifications', JSON.stringify([]));
+  const clearAll = async () => {
+    const { auth } = await import('../lib/firebase');
+    if (auth?.currentUser) {
+      const { db } = await import('../lib/firebase');
+      const { collection, query, where, getDocs, writeBatch } = await import('firebase/firestore');
+      if (db) {
+        const q = query(collection(db, 'notifications'), where('userId', '==', auth.currentUser.uid));
+        const snap = await getDocs(q);
+        const batch = writeBatch(db);
+        snap.forEach(d => batch.delete(d.ref));
+        await batch.commit();
+      }
+    } else {
+      setNotifications([]);
+      localStorage.setItem('maria_notifications', JSON.stringify([]));
+    }
   };
 
   const unreadCount = notifications.filter(n => !n.isRead).length;

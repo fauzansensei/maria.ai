@@ -16,10 +16,11 @@ service cloud.firestore {
     }
 
     function isChatOwner(chatId) {
+      // Use get() once to check ownership. exists() is often redundant if you use get().
+      // If the chat doesn't exist yet (during create), this might fail, so we handle that.
       return isSignedIn() && (
-        !exists(/databases/$(database)/documents/chats/$(chatId)) || 
-        get(/databases/$(database)/documents/chats/$(chatId)).data.userId == request.auth.uid ||
-        chatId == 'initial-chat'
+        chatId == 'initial-chat' ||
+        get(/databases/$(database)/documents/chats/$(chatId)).data.userId == request.auth.uid
       );
     }
 
@@ -29,14 +30,16 @@ service cloud.firestore {
       allow get: if isOwner(userId);
       allow create: if isOwner(userId);
       allow update: if isOwner(userId);
+      allow delete: if false;
     }
 
     match /chats/{chatId} {
-      allow get: if isSignedIn() && (chatId == 'initial-chat' || !exists(/databases/$(database)/documents/chats/$(chatId)) || resource.data.userId == request.auth.uid);
+      // For get/update/delete, we use 'resource' which is the existing document.
+      // This is efficient as it doesn't count as an extra read in the same way get() does in some contexts.
+      allow get: if isSignedIn() && (chatId == 'initial-chat' || resource.data.userId == request.auth.uid);
       allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
-      allow create: if isSignedIn();
-      allow update: if isSignedIn() && (resource.data.userId == request.auth.uid);
-      allow delete: if isSignedIn() && (resource.data.userId == request.auth.uid || chatId == 'initial-chat' || !exists(/databases/$(database)/documents/chats/$(chatId)));
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow update, delete: if isSignedIn() && resource.data.userId == request.auth.uid;
 
       match /messages/{messageId} {
         allow read: if isChatOwner(chatId);
@@ -47,15 +50,14 @@ service cloud.firestore {
 
     match /reminders/{reminderId} {
       allow get, list: if isSignedIn() && resource.data.userId == request.auth.uid;
-      allow create: if isSignedIn();
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
       allow update, delete: if isSignedIn() && resource.data.userId == request.auth.uid;
     }
 
     match /notifications/{notificationId} {
       allow get, list: if isSignedIn() && resource.data.userId == request.auth.uid;
-      allow create: if false; 
-      allow update: if isSignedIn() && resource.data.userId == request.auth.uid;
-      allow delete: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow update, delete: if isSignedIn() && resource.data.userId == request.auth.uid;
     }
   }
 }

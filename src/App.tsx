@@ -97,8 +97,25 @@ function MainApp() {
   const [isSavedItemsOpen, setIsSavedItemsOpen] = useState(false);
   const [unreadNotifications, setUnreadNotifications] = useState(0);
 
-  const updateUnreadCount = useCallback(() => {
+  const updateUnreadCount = useCallback(async () => {
     try {
+      const { auth } = await import('./lib/firebase');
+      if (auth?.currentUser) {
+        // Load from Firestore instead of localStorage
+        const { collection, query, where, getDocs } = await import('firebase/firestore');
+        const { db } = await import('./lib/firebase');
+        if (db) {
+          const q = query(
+            collection(db, 'notifications'),
+            where('userId', '==', auth.currentUser.uid),
+            where('isRead', '==', false)
+          );
+          const snap = await getDocs(q);
+          setUnreadNotifications(snap.size);
+          return;
+        }
+      }
+
       const saved = localStorage.getItem('maria_notifications');
       if (saved && saved !== 'null' && saved !== 'undefined') {
         const notifs = JSON.parse(saved);
@@ -556,18 +573,21 @@ function MainApp() {
             setActiveChatId('');
             setIsMigrationFinished(true);
             
-            // Aggressive Cleanup to prevent ghosting
+            // Aggressive Cleanup to prevent ghosting and memory pressure
             const keysToRemove = [];
             for (let i = 0; i < localStorage.length; i++) {
               const key = localStorage.key(i);
-              if (key && key.startsWith('maria_')) {
+              if (key && (key.startsWith('maria_') || key.startsWith('firebase:'))) {
                 keysToRemove.push(key);
               }
             }
             keysToRemove.forEach(k => localStorage.removeItem(k));
             
             // Re-load chats as anonymous
-            setTimeout(() => loadChats(), 100);
+            setTimeout(() => {
+              loadChats();
+              updateUnreadCount();
+            }, 100);
             
             window.dispatchEvent(new Event('maria_refresh_system'));
             return;
@@ -698,23 +718,20 @@ function MainApp() {
           setUser(currentUser);
 
           // Aggressive Memory Cleanup for authenticated users
-          // We can remove maria_history_* keys because we rely on Firebase now
+          // We remove history and notification caches to prevent "force close" on older devices
           setTimeout(() => {
             try {
               const keysToPurge = [];
               for (let i = 0; i < localStorage.length; i++) {
                 const key = localStorage.key(i);
-                if (key && key.startsWith('maria_history_')) {
+                if (key && (key.startsWith('maria_history_') || key === 'maria_notifications')) {
                   keysToPurge.push(key);
                 }
               }
-              keysToPurge.forEach(k => {
-                // Ensure we don't accidentally purge something we just migrated in this tick
-                localStorage.removeItem(k);
-              });
-              console.log(`Maria: Purged ${keysToPurge.length} local history caches to save memory.`);
+              keysToPurge.forEach(k => localStorage.removeItem(k));
+              console.log(`Maria: Purged ${keysToPurge.length} local history caches to save memory and prevent force-close.`);
             } catch(e) {}
-          }, 3000); // Wait a few seconds to ensure migration/sync stable
+          }, 5000); // Higher delay to ensure migration finished
 
           // 3. Real-time Profile Listener
           try {

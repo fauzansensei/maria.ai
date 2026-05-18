@@ -432,9 +432,36 @@ export default function MariaAgent({ chatId, language, userName, isFocusMode = f
       setMessages(finalMessages);
       saveToStorage(finalMessages);
 
-      // --- SMART AUTOMATION LOGIC ---
+      // --- SMART NOTIFICATION LOGIC (Firestore first) ---
       const response = responseData.text;
-      const autoEnabled = localStorage.getItem('maria_profile') ? JSON.parse(localStorage.getItem('maria_profile')!).preferences?.autoNotify : false;
+      const profileStr = localStorage.getItem('maria_profile');
+      const profile = profileStr ? JSON.parse(profileStr) : null;
+      const autoEnabled = profile?.preferences?.autoNotify || false;
+      
+      const { auth } = await import('../lib/firebase');
+      const { db } = await import('../lib/firebase');
+
+      const triggerNotification = async (notifData: any) => {
+        if (auth?.currentUser && db) {
+          try {
+            const { doc, setDoc } = await import('firebase/firestore');
+            const notifRef = doc(db, 'notifications', notifData.id);
+            await setDoc(notifRef, {
+              ...notifData,
+              userId: auth.currentUser.uid
+            });
+          } catch (e) {
+            console.error("Maria: Failed to save notification to Firestore", e);
+          }
+        } else {
+          // Fallback to local for anonymous
+          const existingNotifs = JSON.parse(localStorage.getItem('maria_notifications') || '[]');
+          existingNotifs.unshift(notifData);
+          localStorage.setItem('maria_notifications', JSON.stringify(existingNotifs.slice(0, 50)));
+        }
+        window.dispatchEvent(new Event('maria_new_notification'));
+      };
+
       if (autoEnabled) {
           const lowerResponse = response.toLowerCase();
           const isWorking = lowerResponse.includes('mulai kerja') || lowerResponse.includes('mode kerja') || lowerResponse.includes('semangat bekerja');
@@ -451,21 +478,16 @@ export default function MariaAgent({ chatId, language, userName, isFocusMode = f
                   isRead: false,
                   metadata: { automation: status }
               };
-              const existingNotifs = JSON.parse(localStorage.getItem('maria_notifications') || '[]');
-              existingNotifs.unshift(newNotif);
-              localStorage.setItem('maria_notifications', JSON.stringify(existingNotifs.slice(0, 50)));
-              window.dispatchEvent(new Event('maria_new_notification'));
+              await triggerNotification(newNotif);
               
-              // Effect: Trigger profile update or dashboard changes
               if (isWorking) {
                   window.dispatchEvent(new CustomEvent('maria_automation', { detail: { type: 'WORK_START' } }));
-                  console.log("Maria Automation: Working Mode");
               } else if (isHome) {
                   window.dispatchEvent(new CustomEvent('maria_automation', { detail: { type: 'WORK_END' } }));
               }
           }
       }
-      // -------------------------------
+
       const savedKeywords = localStorage.getItem('maria_keywords');
       if (savedKeywords) {
         try {
@@ -482,15 +504,13 @@ export default function MariaAgent({ chatId, language, userName, isFocusMode = f
               timestamp: Date.now(),
               isRead: false
             };
-            const existingNotifs = JSON.parse(localStorage.getItem('maria_notifications') || '[]');
-            existingNotifs.unshift(newNotif);
-            localStorage.setItem('maria_notifications', JSON.stringify(existingNotifs.slice(0, 50)));
-            window.dispatchEvent(new Event('maria_new_notification'));
+            await triggerNotification(newNotif);
           }
         } catch (e) {
           console.error("Error detecting keywords", e);
         }
       }
+      // -------------------------------
     } catch (error: any) {
       console.error(error);
       
