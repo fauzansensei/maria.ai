@@ -215,18 +215,31 @@ function MainApp() {
                 const firstUserMsg = messages.find((m: any) => m.role === 'user');
                 const title = firstUserMsg ? (firstUserMsg.content.substring(0, 35) + (firstUserMsg.content.length > 35 ? '...' : '')) : 'Migration Chat';
                 const newId = generateId('legacy');
-                chatsObj[newId] = { 
-                   id: newId, 
-                   title, 
-                   updatedAt: Date.now(),
-                   userId: currentUserId 
-                };
-                localStorage.setItem(`maria_history_${newId}`, JSON.stringify(messages));
-                localStorage.removeItem('maria_chat_history');
-                changed = true;
-              } else {
-                 localStorage.removeItem('maria_chat_history');
-              }
+                  // Don't keep in localStorage for users, move to Firebase then clear
+                  import('firebase/firestore').then(async ({ doc, writeBatch }) => {
+                    const { db, sanitizeForFirestore } = await import('./lib/firebase');
+                    if (db) {
+                      const batch = writeBatch(db);
+                      const chatRef = doc(db, 'chats', newId);
+                      batch.set(chatRef, { 
+                        id: newId, 
+                        title, 
+                        updatedAt: Date.now(),
+                        userId: currentUserId 
+                      }, { merge: true });
+                      
+                      messages.forEach((m: any) => {
+                        const mRef = doc(db, 'chats', newId, 'messages', m.id || generateId('msg'));
+                        batch.set(mRef, sanitizeForFirestore(m));
+                      });
+                      await batch.commit().catch(console.error);
+                    }
+                  });
+                  localStorage.removeItem('maria_chat_history');
+                  changed = true;
+                } else {
+                   localStorage.removeItem('maria_chat_history');
+                }
             } catch (e) {
               localStorage.removeItem('maria_chat_history');
             }
@@ -251,7 +264,18 @@ function MainApp() {
                 try {
                   const messages = JSON.parse(initialChatHistory);
                   if (Array.isArray(messages) && messages.length > 0) {
-                     localStorage.setItem(`maria_history_${newId}`, initialChatHistory);
+                     // Move to Firebase immediately
+                     import('firebase/firestore').then(async ({ doc, writeBatch }) => {
+                       const { db, sanitizeForFirestore } = await import('./lib/firebase');
+                       if (db) {
+                         const batch = writeBatch(db);
+                         messages.forEach((m: any) => {
+                           const mRef = doc(db, 'chats', newId, 'messages', m.id || generateId('msg'));
+                           batch.set(mRef, sanitizeForFirestore(m));
+                         });
+                         await batch.commit().catch(console.error);
+                       }
+                     });
                   }
                   localStorage.removeItem('maria_history_initial-chat');
                 } catch (e) {
@@ -294,7 +318,23 @@ function MainApp() {
           // Normalization
           Object.keys(chatsObj).forEach(id => {
             if (chatsObj[id].messages) {
-              localStorage.setItem(`maria_history_${id}`, JSON.stringify(chatsObj[id].messages));
+              // Move to Firebase if logged in, otherwise keep limited versions
+              const messages = chatsObj[id].messages;
+              if (currentUserId !== 'anonymous') {
+                import('firebase/firestore').then(async ({ doc, writeBatch }) => {
+                  const { db, sanitizeForFirestore } = await import('./lib/firebase');
+                  if (db) {
+                    const batch = writeBatch(db);
+                    messages.forEach((m: any) => {
+                      const mRef = doc(db, 'chats', id, 'messages', m.id || generateId('msg'));
+                      batch.set(mRef, sanitizeForFirestore(m));
+                    });
+                    await batch.commit().catch(console.error);
+                  }
+                });
+              } else {
+                localStorage.setItem(`maria_history_${id}`, JSON.stringify(messages.slice(-20)));
+              }
               delete chatsObj[id].messages;
               changed = true;
             }
@@ -507,10 +547,13 @@ function MainApp() {
           setIsMigrationFinished(false);
 
           if (!currentUser) {
+            // Reset all state
             setUser(null);
             setUserName('Pengguna');
             setUserAvatar(null);
             setIsPlus(false);
+            setChatSessions([]);
+            setActiveChatId('');
             setIsMigrationFinished(true);
             
             // Aggressive Cleanup to prevent ghosting
@@ -522,6 +565,9 @@ function MainApp() {
               }
             }
             keysToRemove.forEach(k => localStorage.removeItem(k));
+            
+            // Re-load chats as anonymous
+            setTimeout(() => loadChats(), 100);
             
             window.dispatchEvent(new Event('maria_refresh_system'));
             return;
@@ -539,7 +585,12 @@ function MainApp() {
                 const chatsStr = localStorage.getItem('maria_chats');
                 const chatsObj = (chatsStr && chatsStr !== 'null') ? JSON.parse(chatsStr) : {};
                 chatsObj[newId] = { id: newId, title, updatedAt: Date.now(), userId: 'anonymous' };
-                localStorage.setItem(`maria_history_${newId}`, JSON.stringify(messages));
+                // Don't keep in localStorage for users, move to Firebase later or keep limited
+                if (currentUser) {
+                  localStorage.removeItem(`maria_history_${newId}`);
+                } else {
+                  localStorage.setItem(`maria_history_${newId}`, JSON.stringify(messages.slice(-20)));
+                }
                 localStorage.setItem('maria_chats', JSON.stringify(chatsObj));
                 localStorage.removeItem('maria_chat_history');
               }
@@ -554,7 +605,9 @@ function MainApp() {
               const chatsObj = JSON.parse(chatsStr);
               const toMigrateMetadata: string[] = [];
               Object.keys(chatsObj).forEach(id => {
-                if (!chatsObj[id].userId || chatsObj[id].userId === 'anonymous') {
+                // Claim the chat if it's anonymous or doesn't belong to the current user yet
+                // but is present in this browser. This ensures local availability after switching accounts.
+                if (!chatsObj[id].userId || chatsObj[id].userId === 'anonymous' || chatsObj[id].userId !== currentUser.uid) {
                   chatsObj[id].userId = currentUser.uid;
                   toMigrateMetadata.push(id);
                 }
@@ -643,6 +696,25 @@ function MainApp() {
           
           // Now it's safe to set user and trigger dependent components
           setUser(currentUser);
+
+          // Aggressive Memory Cleanup for authenticated users
+          // We can remove maria_history_* keys because we rely on Firebase now
+          setTimeout(() => {
+            try {
+              const keysToPurge = [];
+              for (let i = 0; i < localStorage.length; i++) {
+                const key = localStorage.key(i);
+                if (key && key.startsWith('maria_history_')) {
+                  keysToPurge.push(key);
+                }
+              }
+              keysToPurge.forEach(k => {
+                // Ensure we don't accidentally purge something we just migrated in this tick
+                localStorage.removeItem(k);
+              });
+              console.log(`Maria: Purged ${keysToPurge.length} local history caches to save memory.`);
+            } catch(e) {}
+          }, 3000); // Wait a few seconds to ensure migration/sync stable
 
           // 3. Real-time Profile Listener
           try {
@@ -757,14 +829,15 @@ function MainApp() {
 
                 const isWipeout = Object.keys(firebaseSessions).length === 0 && Object.keys(currentLocal).length > 0;
                 
-                // CRITICAL: During migration or if Firebase is slow, NEVER wipe local sessions if they have content
-                if (isMigrationFinished && !isWipeout) {
+                // CRITICAL: Always prioritize keeping local content if it hasn't been synced yet or if Firebase is empty
+                // We ONLY wipe local if it's explicitly deleted or if migration is definitely finished AND we've received content
+                if (!isWipeout || (isMigrationFinished && snap.metadata.fromCache === false)) {
                    localStorage.setItem('maria_chats', JSON.stringify(merged));
                    const sessions = Object.values(merged) as ChatSession[];
                    const sorted = sessions.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
                    setChatSessions(sorted);
-                } else if (isFirstSnapshot || !isMigrationFinished) {
-                   // Keep currentLocal to prevent flicker/disappear
+                } else {
+                   // Still migrating or Firebase is empty/slow - keep what we have locally to avoid flicker
                    const sessions = Object.values(currentLocal).sort((a: any, b: any) => (b.updatedAt || 0) - (a.updatedAt || 0)) as ChatSession[];
                    if (sessions.length > 0) {
                      setChatSessions(sessions);

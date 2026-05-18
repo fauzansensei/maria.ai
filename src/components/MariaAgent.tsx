@@ -108,18 +108,7 @@ export default function MariaAgent({ chatId, language, userName, isFocusMode = f
 
     const loadChat = async () => {
       try {
-        // ALWAYS try local cache first for instant UI response (Stale-While-Revalidate)
-        const historyStr = localStorage.getItem(`maria_history_${chatId}`);
-        if (historyStr && historyStr !== 'null') {
-          try {
-            const msgs = JSON.parse(historyStr);
-            if (Array.isArray(msgs) && msgs.length > 0) {
-              setMessages(msgs);
-              // don't set initializing to false yet if we want a loader, but we have content
-            }
-          } catch(e) {}
-        }
-
+        // Try Firestore first if logged in
         const { auth } = await import('../lib/firebase');
         if (auth?.currentUser) {
           const { collection, query, onSnapshot, orderBy, getDocs } = await import('firebase/firestore');
@@ -128,15 +117,9 @@ export default function MariaAgent({ chatId, language, userName, isFocusMode = f
             const messagesRef = collection(db, 'chats', chatId, 'messages');
             const q = query(messagesRef, orderBy('timestamp', 'asc'));
             
-            // First check if collection exists/empty via one-time fetch to avoid flicker if it's truly empty
-            // GetDocs respects cache too.
-            const initialSnap = await getDocs(q).catch(() => null);
-            if (initialSnap && !initialSnap.empty) {
-               const initialRemoteMsgs = initialSnap.docs.map(doc => ({ id: doc.id, ...doc.data() } as any));
-               setMessages(initialRemoteMsgs);
-               setIsInitializing(false);
-            }
-
+            // First check local state for immediate UI response (if we came from another chat)
+            // But don't rely on localStorage if we can avoid it.
+            
             unsubscribeMessages = onSnapshot(q, (snap) => {
               const remoteMsgs: Message[] = [];
               snap.forEach(doc => {
@@ -146,26 +129,11 @@ export default function MariaAgent({ chatId, language, userName, isFocusMode = f
               
               if (remoteMsgs.length > 0) {
                 setMessages(remoteMsgs);
-                // PERSIST: Update local cache whenever we get remote messages to prevent "disappearing" on next mount
-                localStorage.setItem(`maria_history_${chatId}`, JSON.stringify(remoteMsgs));
+                // Minimize localStorage: We don't save history here anymore for logged in users
               } else {
-                // If remote is empty, CHECK LOCAL CACHE. 
-                // Do not wipe messages if local cache has them (prevent flicker during migration)
-                const cached = localStorage.getItem(`maria_history_${chatId}`);
-                if (cached && cached !== 'null' && cached !== '[]') {
-                   try {
-                     const parsed = JSON.parse(cached);
-                     if (Array.isArray(parsed) && parsed.length > 0) {
-                        setMessages(parsed);
-                        setIsInitializing(false);
-                        return;
-                     }
-                   } catch(e) {}
-                }
-
-                if (initialSnap && (initialSnap as any).empty) {
-                  // Truly a new chat with no messages
-                  setMessages([
+                // If remote is empty, we only show welcome if it's truly a new chat
+                if (!snap.metadata.fromCache) {
+                   setMessages([
                     {
                       id: 'welcome',
                       role: 'assistant',
@@ -178,9 +146,8 @@ export default function MariaAgent({ chatId, language, userName, isFocusMode = f
               setIsInitializing(false);
             }, (err: any) => {
               console.error("Messages snapshot error:", err);
-              // Handle Permission Denied gracefully during migration
               if (err.code === 'permission-denied') {
-                console.warn("Maria: Permission denied for messages, keeping current state.");
+                console.warn("Maria: Permission denied for messages.");
               }
               setIsInitializing(false);
             });
@@ -188,7 +155,7 @@ export default function MariaAgent({ chatId, language, userName, isFocusMode = f
             setIsInitializing(false);
           }
         } else {
-          // NOT LOGGED IN
+          // NOT LOGGED IN - Still use limited localStorage for anonymous users
           const historyStr = localStorage.getItem(`maria_history_${chatId}`);
           if (historyStr && historyStr !== 'null') {
             try {
@@ -244,10 +211,7 @@ export default function MariaAgent({ chatId, language, userName, isFocusMode = f
 
   const saveToStorage = async (updatedMessages: Message[]) => {
     try {
-      // 1. Save messages to specific history key
-      localStorage.setItem(`maria_history_${chatId}`, JSON.stringify(updatedMessages));
-
-      // 2. Update metadata in maria_chats
+      // 1. Update metadata in maria_chats (Keep metadata light)
       const chatsStr = localStorage.getItem('maria_chats');
       const allChats = (chatsStr && chatsStr !== 'null') ? JSON.parse(chatsStr) : {};
       let title = allChats[chatId]?.title || 'Chat Baru';
@@ -269,11 +233,19 @@ export default function MariaAgent({ chatId, language, userName, isFocusMode = f
       
       localStorage.setItem('maria_chats', JSON.stringify(allChats));
       
+      // 2. Clear local history for logged in users to save memory
+      const { auth } = await import('../lib/firebase');
+      if (auth?.currentUser) {
+        localStorage.removeItem(`maria_history_${chatId}`);
+      } else {
+        // Only keep limited history for anonymous users (e.g., last 20 messages)
+        localStorage.setItem(`maria_history_${chatId}`, JSON.stringify(updatedMessages.slice(-20)));
+      }
+      
       window.dispatchEvent(new CustomEvent('maria_history_update', { detail: { chatId } }));
       window.dispatchEvent(new Event('maria_refresh_system'));
       
       // FIREBASE SYNC - metadata + latest message
-      const { auth } = await import('../lib/firebase');
       if (auth?.currentUser) {
         const { doc, writeBatch } = await import('firebase/firestore');
         const { db, handleFirestoreError, OperationType } = await import('../lib/firebase');

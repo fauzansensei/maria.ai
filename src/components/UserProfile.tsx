@@ -218,11 +218,26 @@ export default function UserProfile({ isOpen, onClose, onLanguageChange, isLiteM
     loadSettings();
     window.addEventListener('maria_refresh_system', loadSettings);
     window.addEventListener('storage', loadSettings);
+
+    const handleRepair = async () => {
+      if (!user) return;
+      try {
+        localStorage.removeItem('maria_migration_v2_done');
+        window.dispatchEvent(new Event('maria_force_sync'));
+        alert('Proses perbaikan dimulai. Mohon tunggu beberapa saat agar data tersinkronisasi kembali.');
+      } catch (e) {
+        console.error(e);
+      }
+    };
+
+    window.addEventListener('maria_repair_sync', handleRepair);
+
     return () => {
       window.removeEventListener('maria_refresh_system', loadSettings);
       window.removeEventListener('storage', loadSettings);
+      window.removeEventListener('maria_repair_sync', handleRepair);
     };
-  }, []);
+  }, [user]);
 
   const saveProfile = async (nextProfile: UserProfileData) => {
     setProfile(nextProfile);
