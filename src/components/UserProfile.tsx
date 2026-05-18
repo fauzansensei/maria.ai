@@ -49,7 +49,6 @@ interface UserProfileData {
     homeStartTime: string;
     autoNotify: boolean;
     customInstructions: string;
-    paidApiKey: string;
   };
   notifications: {
     codex: 'push' | 'email' | 'both' | 'none';
@@ -106,8 +105,7 @@ export default function UserProfile({ isOpen, onClose, onLanguageChange, isLiteM
       workEndTime: '17:00',
       homeStartTime: '18:00',
       autoNotify: true,
-      customInstructions: '',
-      paidApiKey: ''
+      customInstructions: ''
     },
     notifications: {
       codex: 'push',
@@ -188,8 +186,7 @@ export default function UserProfile({ isOpen, onClose, onLanguageChange, isLiteM
               workEndTime: '17:00',
               homeStartTime: '18:00',
               autoNotify: true,
-              customInstructions: '',
-              paidApiKey: ''
+              customInstructions: ''
             },
             notifications: {
               codex: 'push',
@@ -734,35 +731,11 @@ export default function UserProfile({ isOpen, onClose, onLanguageChange, isLiteM
                                     Hapus
                                   </button>
                                </div>
-
-                               {/* API Key Management (Plus Only or BYOK) */}
-                               <div className={`space-y-4 p-6 rounded-2xl border ${isDark ? 'bg-slate-900/20 border-slate-800/50' : 'bg-slate-50 border-slate-100 shadow-sm'}`}>
-                                 <div className="flex items-center gap-2">
-                                   <CreditCard size={14} className="text-brand-blue" />
-                                   <p className="text-sm font-black">API Key Management</p>
-                                 </div>
-                                 <p className={`text-[10px] font-bold ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
-                                   Jika Anda memiliki API Key Gemini berbayar (Plus), masukkan di sini untuk performa lebih cepat dan kuota lebih tinggi.
-                                 </p>
-                                 <div className="relative">
-                                   <input 
-                                     type="password"
-                                     value={profile.preferences.paidApiKey}
-                                     onChange={(e) => handleUpdatePreference('paidApiKey', e.target.value)}
-                                     placeholder="Masukkan API Key Anda..."
-                                     className={`w-full border rounded-xl px-4 py-3 text-xs font-bold outline-none transition-all ${
-                                       isDark 
-                                       ? 'bg-slate-950 border-slate-800 text-white focus:border-brand-blue/50' 
-                                       : 'bg-white border-slate-100 text-slate-900 focus:border-brand-blue/50'
-                                     }`}
-                                   />
-                                 </div>
-                               </div>
-                             </div>
-                          </div>
-                        </div>
+                            </div>
+                         </div>
                       </div>
-                    )}
+                    </div>
+                  )}
 
                     {activeTab === 'personalisasi' && (
                       <div className="space-y-8">

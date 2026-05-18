@@ -43,34 +43,9 @@ async function startServer() {
 
   app.post("/api/maria", async (req, res) => {
     try {
-      const { contents, systemInstruction, temperature, topP, customApiKey, firebaseToken } = req.body;
+      const { contents, systemInstruction, temperature, topP } = req.body;
 
-      let effectiveApiKey = process.env.GEMINI_API_KEY || '';
-      
-      // If user provided a token, check for a paid key in their profile PREFERRING the cloud storage over the request body
-      if (firebaseToken && admin.apps.length) {
-        try {
-          const decodedToken = await admin.auth().verifyIdToken(firebaseToken);
-          const userDoc = await admin.firestore().collection('users').doc(decodedToken.uid).get();
-          if (userDoc.exists) {
-            const data = userDoc.data();
-            // Use paid API key if available in preferences (regardless of Plus status, if they have a key we use it)
-            if (data?.preferences?.paidApiKey) {
-              effectiveApiKey = data.preferences.paidApiKey;
-              console.log(`Maria Server: Using user-provided API key for UID: ${decodedToken.uid}`);
-            }
-          }
-        } catch (e) {
-          console.warn("Maria Server: Firebase token verification failed", e);
-        }
-      }
-
-      // Fallback to customApiKey from body if NO token was provided (legacy support or dev)
-      // but prioritize the cloud-fetched key.
-      if (!firebaseToken && customApiKey) {
-        effectiveApiKey = customApiKey;
-      }
-
+      const effectiveApiKey = process.env.GEMINI_API_KEY || '';
       const ai = new GoogleGenAI({ apiKey: effectiveApiKey });
 
       const response = await ai.models.generateContent({
@@ -102,7 +77,7 @@ async function startServer() {
 
       if (isQuotaError) {
         return res.status(429).json({
-          error: "Kuota API Gemini telah habis atau limit harian tercapai. Silakan coba lagi nanti atau hubungkan kunci API berbayar di Settings.",
+          error: "Kuota API Maria telah habis atau limit harian tercapai. Silakan coba lagi nanti.",
           status: "RESOURCE_EXHAUSTED"
         });
       }
