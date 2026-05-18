@@ -512,8 +512,18 @@ function MainApp() {
             setUserAvatar(null);
             setIsPlus(false);
             setIsMigrationFinished(true);
-            localStorage.removeItem('maria_profile');
-            localStorage.removeItem('maria_quota_limit');
+            
+            // Aggressive Cleanup to prevent ghosting
+            const keysToRemove = [];
+            for (let i = 0; i < localStorage.length; i++) {
+              const key = localStorage.key(i);
+              if (key && key.startsWith('maria_')) {
+                keysToRemove.push(key);
+              }
+            }
+            keysToRemove.forEach(k => localStorage.removeItem(k));
+            
+            window.dispatchEvent(new Event('maria_refresh_system'));
             return;
           }
           
@@ -747,15 +757,18 @@ function MainApp() {
 
                 const isWipeout = Object.keys(firebaseSessions).length === 0 && Object.keys(currentLocal).length > 0;
                 
-                if (isMigrationFinished || !isWipeout) {
+                // CRITICAL: During migration or if Firebase is slow, NEVER wipe local sessions if they have content
+                if (isMigrationFinished && !isWipeout) {
                    localStorage.setItem('maria_chats', JSON.stringify(merged));
                    const sessions = Object.values(merged) as ChatSession[];
                    const sorted = sessions.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
                    setChatSessions(sorted);
-                } else if (isFirstSnapshot) {
-                   // Still migrating or Firebase didn't return any docs for this user yet
+                } else if (isFirstSnapshot || !isMigrationFinished) {
+                   // Keep currentLocal to prevent flicker/disappear
                    const sessions = Object.values(currentLocal).sort((a: any, b: any) => (b.updatedAt || 0) - (a.updatedAt || 0)) as ChatSession[];
-                   setChatSessions(sessions);
+                   if (sessions.length > 0) {
+                     setChatSessions(sessions);
+                   }
                 }
                 
                 isFirstSnapshot = false;

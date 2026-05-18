@@ -148,17 +148,32 @@ export default function MariaAgent({ chatId, language, userName, isFocusMode = f
                 setMessages(remoteMsgs);
                 // PERSIST: Update local cache whenever we get remote messages to prevent "disappearing" on next mount
                 localStorage.setItem(`maria_history_${chatId}`, JSON.stringify(remoteMsgs));
-              } else if (initialSnap && (initialSnap as any).empty) {
-                // Truly a new chat with no messages
-                // ONLY set default messages if we don't already have messages from local cache
-                setMessages(prev => prev.length > 0 ? prev : [
-                  {
-                    id: 'welcome',
-                    role: 'assistant',
-                    content: t.welcome,
-                    timestamp: Date.now(),
-                  },
-                ]);
+              } else {
+                // If remote is empty, CHECK LOCAL CACHE. 
+                // Do not wipe messages if local cache has them (prevent flicker during migration)
+                const cached = localStorage.getItem(`maria_history_${chatId}`);
+                if (cached && cached !== 'null' && cached !== '[]') {
+                   try {
+                     const parsed = JSON.parse(cached);
+                     if (Array.isArray(parsed) && parsed.length > 0) {
+                        setMessages(parsed);
+                        setIsInitializing(false);
+                        return;
+                     }
+                   } catch(e) {}
+                }
+
+                if (initialSnap && (initialSnap as any).empty) {
+                  // Truly a new chat with no messages
+                  setMessages([
+                    {
+                      id: 'welcome',
+                      role: 'assistant',
+                      content: t.welcome,
+                      timestamp: Date.now(),
+                    },
+                  ]);
+                }
               }
               setIsInitializing(false);
             }, (err: any) => {
@@ -375,7 +390,12 @@ export default function MariaAgent({ chatId, language, userName, isFocusMode = f
   const processMessage = async (currentMessages: Message[], text: string, images?: { base64: string; type: string }[] | null) => {
     // Check if we are still in quota cooldown (Skip for Plus users)
     const savedLimit = localStorage.getItem('maria_quota_limit');
-    if (!isPlus && savedLimit && parseInt(savedLimit) > Date.now()) {
+    // Important: check isPlus from profile as well as state
+    const profileStr = localStorage.getItem('maria_profile');
+    const profile = profileStr ? JSON.parse(profileStr) : null;
+    const reallyPlus = isPlus || profile?.isPlus;
+
+    if (!reallyPlus && savedLimit && parseInt(savedLimit) > Date.now()) {
       setQuotaExhausted(true);
       setCountdown(Math.floor((parseInt(savedLimit) - Date.now()) / 1000));
       return;
