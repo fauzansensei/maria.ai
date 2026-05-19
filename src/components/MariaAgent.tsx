@@ -77,26 +77,24 @@ export default function MariaAgent({ chatId, language, userName, user, isFocusMo
     const loadProfile = async () => {
       const { auth } = await import('../lib/firebase');
       if (auth?.currentUser) {
-        const { doc, getDoc } = await import('firebase/firestore');
+        const { doc, getDoc, updateDoc } = await import('firebase/firestore');
         const { db } = await import('../lib/firebase');
         if (db) {
-          const snap = await getDoc(doc(db, 'users', auth.currentUser.uid));
-          if (snap.exists()) {
+          const snap = await getDoc(doc(db, 'users', auth.currentUser.uid)).catch(() => null);
+          if (snap && snap.exists()) {
             const profile = snap.data();
             setIsPlus(profile.isPlus || false);
-            if (profile.quotaResetAt && profile.quotaResetAt > Date.now()) {
-               setQuotaExhausted(true);
-               setResetTimestamp(profile.quotaResetAt);
-               setCountdown(Math.floor((profile.quotaResetAt - Date.now()) / 1000));
-            } else {
-               setQuotaExhausted(false);
+            
+            // Repair: If there's a stuck quotaResetAt, we clear it once to "repair" the user's experience
+            if (profile.quotaResetAt) {
+               await updateDoc(doc(db, 'users', auth.currentUser.uid), { quotaResetAt: null }).catch(() => {});
             }
           }
         }
       } else {
         setIsPlus(false);
-        setQuotaExhausted(false);
       }
+      setQuotaExhausted(false);
     };
     loadProfile();
     window.addEventListener('maria_refresh_system', loadProfile);
@@ -500,30 +498,20 @@ export default function MariaAgent({ chatId, language, userName, user, isFocusMo
                             error?.error?.code === 429;
 
       if (isQuotaExceeded) {
-        // Calculate reset time (until next midnight)
+        // Calculate reset time (shorter cooldown for better UX)
         const now = new Date();
-        const midnight = new Date(now);
-        midnight.setHours(24, 0, 0, 0);
-        const limitTimestamp = midnight.getTime();
+        const cooldownMs = 60 * 1000; // 1 minute cooldown by default
+        const limitTimestamp = now.getTime() + cooldownMs;
         
         setResetTimestamp(limitTimestamp);
         setQuotaExhausted(true);
         setShowQuotaModal(true);
-        setCountdown(Math.floor((limitTimestamp - Date.now()) / 1000));
+        setCountdown(Math.floor(cooldownMs / 1000));
 
-        // Sync quota limit to Firebase Profile
-        const { auth } = await import('../lib/firebase');
-        if (auth?.currentUser) {
-          const { doc, updateDoc } = await import('firebase/firestore');
-          const { db } = await import('../lib/firebase');
-          if (db) {
-             await updateDoc(doc(db, 'users', auth.currentUser.uid), { quotaResetAt: limitTimestamp });
-          }
-        }
+        // We DO NOT sync quota limit to Firestore anymore to prevent long-term lockouts
         
-        // Remove the failing user message from state so it doesn't stay in the UI
+        // Remove the failing user message from state
         setMessages(currentMessages.slice(0, -1));
-        // Also update storage to remove the failing message
         saveToStorage(currentMessages.slice(0, -1));
         return;
       }
@@ -884,28 +872,17 @@ export default function MariaAgent({ chatId, language, userName, user, isFocusMo
                   )}
                   
                   <button 
-                    disabled={countdown > 0}
                     onClick={() => {
                       setShowQuotaModal(false);
+                      setQuotaExhausted(false);
                       setCountdown(0);
                     }}
                     className={`w-full py-3.5 rounded-xl flex items-center justify-center gap-2 text-xs font-black uppercase tracking-widest transition-all ${
-                      countdown > 0 
-                      ? (isDark || isFocusMode ? 'bg-slate-800 text-slate-600' : 'bg-slate-100 text-slate-400')
-                      : (isDark || isFocusMode ? 'bg-slate-800 text-slate-300 hover:text-white' : 'bg-slate-50 text-slate-600 hover:bg-slate-100')
+                      isDark || isFocusMode ? 'bg-slate-800 text-slate-300 hover:text-white' : 'bg-slate-50 text-slate-600 hover:bg-slate-100'
                     }`}
                   >
-                    {countdown > 0 ? (
-                      <>
-                        <RefreshCw size={14} className="animate-spin" />
-                        {t.wait} ({formatCountdown(countdown)})
-                      </>
-                    ) : (
-                      <>
-                        <RefreshCw size={14} className="animate-spin" />
-                        {t.tryAgain}
-                      </>
-                    )}
+                    <RefreshCw size={14} className={countdown > 0 ? 'animate-spin' : ''} />
+                    {countdown > 0 ? t.tryAgain : t.tryAgain}
                   </button>
 
                   <button 
